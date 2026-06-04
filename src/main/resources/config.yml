@@ -1,0 +1,398 @@
+# =============================================================
+# KoraPayments v1.3.1
+# Tác giả: DuyDuong | Discord: lz.dy.dg | Gmail: dduong@kingora.net
+# =============================================================
+# Quyền người chơi: korapayments.default
+# Quyền quản trị:   korapayments.admin
+# Lệnh quản trị:    /kora-admin hoặc /kp-admin
+# Nếu cần hỗ trợ, hãy liên hệ tác giả qua Discord hoặc email.
+#
+#  _  __               ____                                  _       
+# | |/ /___  _ __ __ _|  _ \ __ _ _   _ _ __ ___   ___ _ __ | |_ ___ 
+# | ' // _ \| '__/ _` | |_) / _` | | | | '_ ` _ \ / _ \ '_ \| __/ __|
+# | . \ (_) | | | (_| |  __/ (_| | |_| | | | | | |  __/ | | | |_\__ \
+# |_|\_\___/|_|  \__,_|_|   \__,_|\__, |_| |_| |_|\___|_| |_|\__|___/
+#                                 |___/                              
+#
+# Lưu ý:
+# - Sử dụng lệnh /kora-admin reload sau khi đổi thông tin provider hoặc cấu hình quan trọng.
+# - Hỗ trợ Folia và PlaceholderAPI để tối ưu hiệu suất và hiển thị thông tin.
+# - Placeholder phải đặt trong dấu %, ví dụ:
+#   %kp_donate_total_top_player_1%
+#   %kp_donate_total_top_amount_1%
+# - Nếu identifier %kp_*% bị trùng với plugin khác, dùng alias:
+#   %korapayments_donate_total_top_player_1%
+#   %korapayments_donate_total_top_amount_1%
+# - Xem cách sử dụng PlaceholderAPI tại https://korapay.kingora.net/
+# =============================================================
+
+# Ngôn ngữ hiển thị của plugin.
+# Mặc định: vi
+# Hỗ trợ: vi, en, es, fr, de, pt, ru, zh, ja, ko, th, id, ms, tl, hi, ar, tr, pl
+language: "vi"
+
+# =============================================================
+# LOGGING / DEBUG
+# =============================================================
+# Debug mặc định tắt để console luôn sạch và nhẹ.
+# Bật true khi cần kiểm tra API, webhook, QR hoặc lỗi provider chi tiết.
+logging:
+  debug: false
+
+  console:
+    # true: ghi log quan trọng qua Paper logger.
+    enabled: true
+
+    # Chống spam các dòng log giống nhau trong một khoảng thời gian.
+    anti-spam: true
+    duplicate-window-seconds: 30
+
+    # true: vẫn hiển thị log giao dịch thành công trên console.
+    # File transactions.log luôn được ghi nếu logging.file.enabled = true.
+    transaction-events: true
+
+  file:
+    # Ghi file log giao dịch để dễ đối soát.
+    enabled: true
+
+    # true: ghi file bằng luồng riêng, giảm giật main thread khi server đông người.
+    async: true
+
+    # Giữ tên file cũ để không mất dữ liệu/log cũ.
+    transaction-log: "transactions.log"
+    card-log: "nap_the.txt"
+
+# =============================================================
+# NẠP NGÂN HÀNG
+# =============================================================
+napbank:
+  # Provider nạp bank. Chọn: payos hoặc sepay
+  provider: "sepay"
+
+  # Số tiền tối thiểu cho /bank.
+  min-amount: 2000
+
+  # Số tiền tối đa cho /bank.
+  # Đặt 0 nếu không muốn giới hạn.
+  max-amount: 0
+
+  # Thời gian giữ giao dịch, tính bằng giây.
+  timeout-seconds: 600
+
+  # Chu kỳ kiểm tra giao dịch, tính bằng giây.
+  # Không nên đặt quá thấp để tránh spam API.
+  poll-every-seconds: 10
+
+  # Giao diện /bank gui.
+  gui:
+    amounts:
+      - 10000
+      - 20000
+      - 30000
+      - 50000
+      - 100000
+      - 200000
+      - 300000
+      - 500000
+      - 1000000
+      - 2000000
+      - 5000000
+
+  # Khuyến mãi riêng cho nạp bank.
+  # Chỉ áp dụng cho /bank và nạp thủ công để giữ tương thích hành vi cũ.
+  promotion:
+    enabled: true
+    percent: 20
+    end-date: "31/05/2026 23:59:59"
+
+# PayOS
+# Lấy thông tin tại trang merchant PayOS của bạn.
+payos:
+  client-id: ""
+  api-key: ""
+  checksum-key: ""
+
+  # Nội dung chuyển khoản.
+  # Biến dùng được: {playername}, {player}, {ordercode}, {code}
+  # PayOS giới hạn nội dung khá ngắn, plugin sẽ tự chuẩn hóa nếu cần.
+  payment-format: "{playername} TENCUM {ordercode}" # Vui lòng không bỏ {ordercode} trong này để tránh lỗi!!!
+
+# SePay
+# SePay dùng cơ chế kiểm tra giao dịch định kỳ qua API token.
+sepay:
+  api-token: ""
+
+  # Mã ngân hàng dùng cho VietQR, ví dụ: MBBank, MB,.. Xem danh sách mã ngân hàng tại https://anotepad.com/notes/a84xemr7
+  bank-code: ""
+
+  # Tên ngân hàng chỉ dùng để hiển thị trong chat.
+  bank-name: ""
+
+  account-number: ""
+  account-name: ""
+
+
+  # Nội dung chuyển khoản.
+  # Biến dùng được: {playername}, {player}, {ordercode}, {code}
+  payment-format: "{playername} TENCUM {ordercode}" # Vui lòng không bỏ {ordercode} trong này để tránh lỗi!!!
+
+  # Số giao dịch gần nhất cần kiểm tra mỗi lần gọi API.
+  transaction-lookup-limit: 20
+
+# =============================================================
+# NẠP THẺ CÀO
+# =============================================================
+napthe:
+  # Provider nạp thẻ. Chọn: card2k hoặc gachthefast
+  provider: "gachthefast"
+
+  # Chiết khấu thẻ.
+  # true: trừ chiết khấu trước khi quy đổi points.
+  # false: không trừ chiết khấu.
+  taxes:
+    enabled: true
+
+    # Có thể cấu hình theo mệnh giá chung:
+    #   "10000": 14.4
+    # Hoặc theo nhà mạng:
+    #   VIETTEL:
+    #     "10000": 20.8
+    rates:
+      "10000": 16
+      "20000": 17
+      "30000": 17
+      "50000": 15.5
+      "100000": 15.5
+      "200000": 15
+      "300000": 15
+      "500000": 15
+      "1000000": 15
+
+  # Quy đổi nạp thẻ ra points.
+  # Công thức: points = số_tiền_sau_chiết_khấu / ratio
+  rewards:
+    ratio: 1000
+    commands:
+      - "points give %player% %points%"
+      - "bc &bKoraPayments &8» &f%player% vừa nạp &a%amount% VNĐ &fqua thẻ cào."
+
+  # Khuyến mãi riêng cho nạp thẻ.
+  # Công thức: points cuối = points sau chiết khấu + bonus theo phần trăm bên dưới.
+  promotion:
+    enabled: true
+    percent: 20
+    end-date: "31/05/2026 23:59:59"
+
+  # Giao diện /napthe gui.
+  gui:
+    amounts:
+      - 10000
+      - 20000
+      - 30000
+      - 50000
+      - 100000
+      - 200000
+      - 300000
+      - 500000
+      - 1000000
+      - 2000000
+      - 5000000
+    providers:
+      card2k:
+        telcos: ["VINAPHONE", "ZING", "GARENA"]
+      gachthefast:
+        telcos: ["VINAPHONE", "ZING", "GARENA"]
+      #   telcos: ["VIETTEL", "MOBIFONE", "VINAPHONE", "ZING", "GARENA", "GATE", "VCOIN", "SCOIN"]
+      # gachthefast:
+      #   telcos: ["VIETTEL", "MOBIFONE", "VINAPHONE", "ZING", "GARENA", "GATE", "VCOIN", "SCOIN"]
+
+# Card2K API
+# Bỏ qua phần này nếu bạn không hiểu rõ về nó
+# vì plugin đã có cấu hình mặc định phù hợp với hầu hết người dùng.
+card2k:
+  api:
+    partner_id: ""
+    partner_key: ""
+    domain: "card2k.com"
+    endpoint: "/chargingws/v2"
+    method: "POST"
+
+  # Giữ lại để tương thích config cũ.
+  taxes:
+    enabled: true
+    rates:
+      "10000": 16
+      "20000": 17
+      "30000": 17
+      "50000": 15.5
+      "100000": 15.5
+      "200000": 15
+      "300000": 15
+      "500000": 15
+      "1000000": 15
+  rewards:
+    ratio: 1000
+    commands:
+      - "points give %player% %points%"
+      - "bc &bKoraPayments &8» &f%player% vừa nạp &a%amount% VNĐ &fqua thẻ cào."
+
+# GachTheFast API
+# Bỏ qua phần này nếu bạn không hiểu rõ về nó
+# vì plugin đã có cấu hình mặc định phù hợp với hầu hết người dùng.
+gachthefast:
+  api:
+    partner_id: ""
+    partner_key: ""
+    wallet_id: ""
+    domain: "gachthefast.com"
+    endpoint: "/chargingws/v2"
+    method: "GET"
+
+# =============================================================
+# PHẦN THƯỞNG, KHUYẾN MÃI VÀ LOG
+# =============================================================
+# Lệnh thưởng chung cho nạp bank và nạp thủ công.
+# Biến dùng được: {player}, {points}
+reward-command: "p give {player} {points}"
+
+# Tỷ lệ quy đổi bank/thủ công.
+# Công thức mặc định: points = số_tiền / 1000 * conversion-rate
+conversion-rate: 1
+
+# Ghi chú nâng cấp:
+# - `promotion` cấp gốc từ bản cũ vẫn được plugin đọc làm fallback cho bank/nạp thủ công
+#   nếu server của bạn đang dùng config.yml cũ.
+# - Config mới nên dùng `napbank.promotion` và `napthe.promotion` để tách event bank/thẻ.
+
+# Discord webhook thông báo giao dịch.
+discord-webhook:
+  enabled: true
+  url: "DAN_LINK_WEBHOOK_DISCORD_CUA_BAN_VAO_DAY"
+  username: "KoraPayments"
+  avatar-url: "https://minotar.net/avatar/%player%/100.png"
+  color: 65280
+
+  # Bật/tắt riêng từng loại thông báo giao dịch.
+  transactions:
+    # Thông báo giao dịch nạp ngân hàng
+    bank:
+      enabled: true
+      color: 65280
+    # Thông báo giao dịch nạp thẻ cào
+    card:
+      enabled: true
+      color: 16776960
+    # Thông báo giao dịch nạp thủ công
+    manual:
+      enabled: true
+      color: 10181046
+
+# =============================================================
+# MỐC NẠP CÁ NHÂN
+# =============================================================
+# Cấu trúc:
+# milestones:
+#   'số_tiền':
+#     rewards:
+#       - "lệnh console, dùng %player% cho tên người chơi"
+milestones:
+  '50000':
+    rewards:
+      - "give %player% diamond 5"
+
+  '100000':
+    rewards:
+      - "give %player% diamond 10"
+
+  '150000':
+    rewards:
+      - "give %player% diamond 15"
+
+  '200000':
+    rewards:
+      - "give %player% diamond 20"
+
+  '500000':
+    rewards:
+      - "give %player% diamond 32"
+      - "broadcast &bKoraPayments &8» &f%player% vừa đạt mốc nạp &a500,000 VNĐ."
+
+  '1000000':
+    rewards:
+      - "eco give %player% 200000"
+      - "broadcast &bKoraPayments &8» &f%player% vừa đạt mốc nạp &a1,000,000 VNĐ."
+
+  '2000000':
+    rewards:
+      - "eco give %player% 500000"
+      - "broadcast &bKoraPayments &8» &f%player% vừa đạt mốc nạp &a2,000,000 VNĐ."
+
+# =============================================================
+# MỐC NẠP TOÀN SERVER
+# =============================================================
+# Mốc nạp toàn server cho phép mọi người chơi nhận quà 1 lần khi tổng số tiền
+# toàn máy chủ đạt mốc. Người chơi nhận bằng lệnh: /mocnap server
+# Quản trị có thể đổi mốc bossbar đang theo dõi bằng: /kora-admin mocnap set <số_tiền|auto>
+server-milestones:
+  enabled: true
+
+  # Mốc bossbar đang theo dõi. Đặt 0 để plugin tự chọn mốc kế tiếp theo tổng nạp.
+  active-target: 1000000
+
+  # Chống clone nhận quà mốc nạp server.
+  # Khi bật, người chơi mới phải có tổng nạp cá nhân tối thiểu bên dưới
+  # trước khi nhận quà mốc nạp toàn server.
+  # new-player-only: true  = chỉ áp dụng cho tài khoản vào server sau khi mốc đó đã đạt.
+  # new-player-only: false = mọi người chơi đều phải đủ minimum-personal-donated.
+  anti-clone:
+    enabled: true
+    minimum-personal-donated: 20000
+    new-player-only: true
+
+  bossbar:
+    enabled: true
+    color: BLUE
+    style: SEGMENTED_10
+    update-interval-ticks: 100
+    progress-title: "&bMốc nạp server &8» &f{current}&7/&a{target} VNĐ &8(&e{percent}%&8)"
+    reached-title: "&aMáy chủ đã đạt mốc nạp &e{target} VNĐ&a. &eDùng /mocnap server để nhận."
+
+  # Cấu trúc giống mốc nạp cá nhân:
+  # milestones:
+  #   'số_tiền':
+  #     rewards:
+  #       - "lệnh console, dùng %player% cho tên người chơi"
+  # Biến dùng được: %player%, %amount%, %target%, %server_total%,
+  #                 %amount_formatted%, %target_formatted%, %server_total_formatted%
+  milestones:
+    '1000000':
+      rewards:
+        - "give %player% diamond 5"
+
+    '2000000':
+      rewards:
+        - "give %player% diamond 10"
+        - "eco give %player% 100000"
+
+    '3000000':
+      rewards:
+        - "give %player% diamond 15"
+        - "eco give %player% 200000"
+
+    '4000000':
+      rewards:
+        - "give %player% diamond 20"
+        - "eco give %player% 300000"
+
+    '5000000':
+      rewards:
+        - "give %player% diamond 32"
+        - "eco give %player% 500000"
+
+# =============================================================
+# BSTATS METRICS
+# =============================================================
+# bStats giúp thống kê số server/người chơi đang sử dụng plugin.
+# Nếu bạn không biết gì về nó, hãy bỏ qua nếu không muốn bị lỗi!
+metrics:
+  enabled: true

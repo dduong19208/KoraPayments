@@ -1,0 +1,24 @@
+name: Feature request
+description: Đề xuất tính năng mới cho KoraPayments
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Vấn đề cần giải quyết
+      description: Tính năng này giúp server của bạn giải quyết vấn đề gì?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Giải pháp mong muốn
+      description: Mô tả hành vi, command, config hoặc UI bạn muốn có.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Giải pháp thay thế đã thử
+      description: Có workaround nào hiện tại không?

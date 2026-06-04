@@ -1,0 +1,24 @@
+target/
+*.class
+*.log
+*.tmp
+*.bak
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime plugin data / secrets
+plugins/
+config.local.yml
+store.local.yml
+*.sqlite
+*.db
+
+# Maven
+.mvn/timing.properties

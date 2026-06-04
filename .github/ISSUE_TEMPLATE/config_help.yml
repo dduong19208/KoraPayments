@@ -1,0 +1,33 @@
+name: Configuration help
+description: Cần hỗ trợ cấu hình KoraPayments
+title: "[Config] "
+labels: [question]
+body:
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider/khu vực cần hỗ trợ
+      options:
+        - SePay
+        - PayOS
+        - Card2K
+        - GachTheFast
+        - Discord webhook
+        - Discord Auto Buy
+        - Mốc nạp
+        - PlaceholderAPI
+        - Khác
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Cấu hình liên quan
+      description: Dán phần config liên quan và che toàn bộ token/API key/webhook.
+      render: yaml
+  - type: textarea
+    id: question
+    attributes:
+      label: Bạn muốn plugin hoạt động như thế nào?
+    validations:
+      required: true
