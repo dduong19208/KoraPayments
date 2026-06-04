@@ -22,15 +22,6 @@
 </p>
 <div align="center">
 
-# KoraPayments
-
-**Plugin nạp thẻ, nạp ngân hàng, mốc nạp, khuyến mãi và Discord Auto Buy cho Minecraft Server**
-
-![Java](https://img.shields.io/badge/Java-17%2B-orange?style=for-the-badge)
-![Paper](https://img.shields.io/badge/Paper%20%2F%20Spigot-1.21.x-blue?style=for-the-badge)
-![Folia](https://img.shields.io/badge/Folia-Supported-brightgreen?style=for-the-badge)
-![Version](https://img.shields.io/badge/KoraPayments-1.3.1-8A2BE2?style=for-the-badge)
-
 [⬇️ Tải plugin](../../releases/latest) · [📘 Hướng dẫn](#-hướng-dẫn-cài-đặt-nhanh) · [⚙️ Cấu hình](docs/CONFIGURATION.md) · [💬 Commands](docs/COMMANDS.md) · [🧩 Placeholders](docs/PLACEHOLDERS.md)
 
 </div>
