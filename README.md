@@ -1,3 +1,12 @@
+<p align="center">
+  <img src="assets/banner.png" alt="KoraPayments Banner" width="100%">
+</p>
+
+<h1 align="center">KoraPayments</h1>
+
+<p align="center">
+  Modern payment solution for Minecraft Paper/Spigot/Folia servers.
+</p>
 <div align="center">
 
 # KoraPayments
