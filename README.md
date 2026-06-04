@@ -1,11 +1,24 @@
 <p align="center">
-  <img src="assets/banner.png" alt="KoraPayments Banner" width="100%">
+  <img src="assets/banner.png" alt="KoraPayments - Modern Minecraft Payment Plugin" width="100%">
 </p>
 
 <h1 align="center">KoraPayments</h1>
 
 <p align="center">
-  Modern payment solution for Minecraft Paper/Spigot/Folia servers.
+  <strong>Giải pháp thanh toán hiện đại cho máy chủ Minecraft</strong>
+</p>
+
+<p align="center">
+  Nạp bank • Nạp thẻ • Mốc nạp • Khuyến mãi • Discord Webhook • Discord Auto Buy
+</p>
+
+<p align="center">
+  <a href="https://github.com/dduong19208/KoraPayments/releases">
+    <img src="https://img.shields.io/github/v/release/dduong19208/KoraPayments?style=for-the-badge&label=Release" alt="Release">
+  </a>
+  <img src="https://img.shields.io/badge/Minecraft-1.21.x-brightgreen?style=for-the-badge" alt="Minecraft">
+  <img src="https://img.shields.io/badge/Java-17+-orange?style=for-the-badge" alt="Java">
+  <img src="https://img.shields.io/badge/Paper%20%2F%20Spigot%20%2F%20Folia-Supported-blue?style=for-the-badge" alt="Platform">
 </p>
 <div align="center">
 
