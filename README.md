@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dduong19208/KoraPayments/releases">
-    <img src="https://img.shields.io/github/v/release/dduong19208/KoraPayments?style=for-the-badge&label=Release" alt="Release">
+  <a href="https://github.com/dduong19208/KoraPayments/releases/latest">
+    <img src="https://img.shields.io/badge/Release-v1.3.1-2ea44f?style=for-the-badge" alt="Release v1.3.1">
   </a>
   <img src="https://img.shields.io/badge/Minecraft-1.21.x-brightgreen?style=for-the-badge" alt="Minecraft">
   <img src="https://img.shields.io/badge/Java-17+-orange?style=for-the-badge" alt="Java">
