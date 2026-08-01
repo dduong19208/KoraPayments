@@ -28,7 +28,7 @@ public class MilestoneGUIManager {
         GUIUtils.fillBorder(inv, GUIUtils.emptyPane());
         paintAccentCorners(inv);
 
-        ConfigurationSection section = plugin.getConfig().getConfigurationSection(MilestoneManager.PERSONAL_MILESTONES_PATH);
+        ConfigurationSection section = plugin.config().getConfigurationSection(MilestoneManager.PERSONAL_MILESTONES_PATH);
         if (section == null) {
             inv.setItem(22, GUIUtils.item(
                     Material.BARRIER,
@@ -110,7 +110,7 @@ public class MilestoneGUIManager {
             return;
         }
 
-        ConfigurationSection section = plugin.getConfig().getConfigurationSection(MilestoneManager.SERVER_MILESTONES_PATH);
+        ConfigurationSection section = plugin.config().getConfigurationSection(MilestoneManager.SERVER_MILESTONES_PATH);
         if (section == null) {
             inv.setItem(22, GUIUtils.item(
                     Material.BARRIER,

@@ -16,6 +16,7 @@ general:
   currency: "VNĐ"
   no-limit: "không giới hạn"
   feature-unavailable: "{prefix}&cTính năng này hiện chưa khả dụng. Vui lòng liên hệ quản trị viên."
+  reward-failed: "{prefix}&cKhông thể phát phần thưởng tự động. Giao dịch chưa bị bỏ qua; vui lòng liên hệ quản trị viên để đối soát."
 
 payment-type:
   bank: "Nạp ngân hàng"
@@ -72,7 +73,13 @@ admin:
     - "&8- &e/kora-admin reset topnap confirm &7Reset dữ liệu top nạp."
     - "&8- &e/kora-admin mocnap set <số_tiền|auto> &7Đổi mốc bossbar toàn server."
     - "&8- &e/kora-admin mocnap bossbar <on|off|toggle|status> &7Bật/tắt bossbar toàn server."
+    - "&8- &e/kora-admin migrate-database sqlite &7Di chuyển dữ liệu từ SQLite sang MySQL/MariaDB/PostgreSQL."
     - "&8&m----------------------------------------"
+  migrate-db-usage: "{prefix}&cCách dùng: &f/kora-admin migrate-database <nguồn> [đường_dẫn_file]"
+  migrate-db-start: "{prefix}&eBắt đầu di chuyển dữ liệu từ &f{source}&e..."
+  migrate-db-progress: "{prefix}&7{message}"
+  migrate-db-success: "{prefix}&a{message}"
+  migrate-db-failed: "{prefix}&c{message}"
 bank:
   usage: "{prefix}&cCách dùng: &f/bank <số_tiền> &7hoặc &f/bank gui"
   cancel-success: "{prefix}&eĐã hủy giao dịch và xóa bản đồ QR."
@@ -111,6 +118,7 @@ bank:
   success-actionbar: "&aThanh toán thành công"
   success-broadcast: "{prefix}&fNgười chơi &b{player} &fvừa nạp thành công &a{amount} VNĐ &fqua ngân hàng."
   success-points: "{prefix}&fBạn nhận được &e{points} Points&f."
+  reward-failed: "{prefix}&cNgân hàng đã xác nhận thanh toán cho đơn &f#{order}&c nhưng lệnh phát thưởng gặp lỗi. Vui lòng liên hệ quản trị viên; giao dịch đã được ghi lại để đối soát."
   webhook-success-title: "Nạp ngân hàng thành công"
   webhook-failure-title: "Giao dịch ngân hàng thất bại"
   webhook-footer: "KoraPayments - Ngân hàng"
@@ -118,8 +126,10 @@ bank:
 card:
   usage: "{prefix}&cCách dùng: &f/napthe gui &7hoặc &f/napthe <LoạiThẻ> <MệnhGiá> [Serial] [MãThẻ]"
   amount-number: "{prefix}&cMệnh giá phải là số."
+  invalid-telco: "{prefix}&cLoại thẻ &f{telco}&c không hợp lệ hoặc chưa được hỗ trợ."
+  invalid-denomination: "{prefix}&cMệnh giá &f{amount} VNĐ&c không hợp lệ hoặc chưa được hỗ trợ."
   no-session: "{prefix}&cKhông tìm thấy giao dịch thẻ cần xác nhận."
-  provider-missing: "{prefix}&cCấu hình {provider} chưa đầy đủ. Vui lòng kiểm tra config.yml."
+  provider-missing: "{prefix}&cCấu hình {provider} chưa đầy đủ. Vui lòng kiểm tra tệp tương ứng trong thư mục providers/."
   sending: "{prefix}&aĐang gửi thẻ lên {provider}, vui lòng chờ..."
   connection-failed: "{prefix}&cKhông thể kết nối tới {provider}. Vui lòng thử lại sau."
   invalid-response: "{prefix}&c{provider} trả về dữ liệu không hợp lệ."
@@ -146,8 +156,28 @@ card:
   success-broadcast: "{prefix}&fNgười chơi &b{player} &fvừa nạp thành công &a{amount} VNĐ &fqua thẻ cào."
   success-received: "{prefix}&fHệ thống đã nhận thẻ &e{telco} {amount} VNĐ&f."
   success-points: "{prefix}&fBạn nhận được &e{points} Points&f. Cảm ơn bạn!"
+  reward-failed: "{prefix}&cThẻ đã được hệ thống xác nhận nhưng phần thưởng chưa thể phát tự động. Vui lòng liên hệ quản trị viên để đối soát."
   webhook-title: "Nạp thẻ thành công"
   webhook-footer: "KoraPayments - Thẻ cào"
+
+dialog:
+  card-provider-title: "&bChọn loại thẻ"
+  card-provider-body: "&7Cổng xử lý hiện tại: &f{provider}&7. Chọn loại thẻ bạn muốn nạp."
+  card-amount-title: "&bChọn mệnh giá &8• &f{telco}"
+  card-amount-body: "&7Số Points dự kiến đã tính thuế thẻ và khuyến mãi hiện tại."
+  card-input-title: "&bNhập thẻ &8• &f{telco} {amount} VNĐ"
+  card-input-body: "&7Nhập đúng serial và mã thẻ. Kiểm tra kỹ trước khi xác nhận."
+  serial-label: "Serial"
+  pin-label: "Mã thẻ"
+  card-input-invalid: "{prefix}&cSerial và mã thẻ không được để trống."
+  bank-title: "&bChọn số tiền nạp ngân hàng"
+  bank-body: "&7Chọn nhanh một mệnh giá hoặc nhập số tiền tùy chỉnh."
+  bank-custom-title: "&bNhập số tiền tùy chỉnh"
+  bank-custom-body: "&7Nhập số tiền VNĐ, chỉ dùng chữ số."
+  amount-label: "Số tiền"
+  custom-amount: "&eSố tiền tùy chỉnh"
+  confirm: "&aXác nhận"
+  cancel: "&cĐóng"
 
 manual:
   success-actionbar: "&aNạp thủ công thành công"
@@ -158,6 +188,7 @@ manual:
   target-points: "{prefix}&fBạn nhận được &e{points} Points&f."
   sender-success: "{prefix}&aĐã nạp thủ công cho &b{player} &asố tiền &e{amount} VNĐ&a."
   sender-points: "{prefix}&fNgười chơi nhận &e{points} Points&f."
+  reward-failed: "{prefix}&cKhông thể phát phần thưởng cho &f{player}&c. Không ghi nhận lần nạp thủ công này; hãy kiểm tra economy và lệnh thưởng."
 
 promotion:
   bonus: "{prefix}&fBạn nhận thêm &a{bonus}% &fPoints từ khuyến mãi hiện tại."
@@ -174,7 +205,7 @@ milestone:
 
 server-milestone:
   disabled: "{prefix}&cMốc nạp toàn server đang tắt."
-  no-config: "{prefix}&cChưa cấu hình mốc nạp toàn server trong config.yml."
+  no-config: "{prefix}&cChưa cấu hình mốc nạp toàn server trong milestones.yml."
   reached-broadcast: "{prefix}&aMáy chủ đã đạt mốc nạp &e{amount} VNĐ&a. Dùng &e/mocnap server &ađể nhận quà!"
   not-reached: "{prefix}&cMáy chủ chưa đạt mốc nạp này."
   already-claimed: "{prefix}&eBạn đã nhận phần thưởng mốc nạp server này rồi."
@@ -345,7 +376,7 @@ history:
   admin-text-line: "&8#{index} &7{time} &8| &f{type} &8| &a{amount} VNĐ &8| &7Provider: &f{provider} &8| &7{detail}"
 
 milestone-gui:
-  no-config: "&7Chưa cấu hình mốc nạp trong config.yml."
+  no-config: "&7Chưa cấu hình mốc nạp trong milestones.yml."
   status-claimed: "&7Trạng thái: &fĐã nhận"
   status-claimable: "&7Trạng thái: &aCó thể nhận"
   status-locked: "&7Trạng thái: &cChưa đạt"
@@ -366,7 +397,7 @@ milestone-gui:
   reward-money-generic: "Tiền ingame"
 
 server-milestone-gui:
-  no-config: "&7Chưa cấu hình mốc nạp toàn server trong config.yml."
+  no-config: "&7Chưa cấu hình mốc nạp toàn server trong milestones.yml."
   status-claimed: "&7Trạng thái: &fĐã nhận"
   status-claimable: "&7Trạng thái: &aCó thể nhận"
   status-locked: "&7Trạng thái: &cChưa đạt"

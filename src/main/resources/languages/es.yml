@@ -105,7 +105,7 @@ card:
   usage: "{prefix}&cUsage: &f/napthe <Type> <Amount> &7or &f/napthe <Type> <Amount> <Serial> <Code>"
   amount-number: "{prefix}&cCard amount must be a number."
   no-session: "{prefix}&cNo card transaction is waiting for confirmation."
-  provider-missing: "{prefix}&c{provider} configuration is incomplete. Please check config.yml."
+  provider-missing: "{prefix}&c{provider} configuration is incomplete. Please check the matching file in providers/."
   sending: "{prefix}&aSending card to {provider}, please wait..."
   connection-failed: "{prefix}&cCannot connect to {provider}. Please try again later."
   invalid-response: "{prefix}&c{provider} returned invalid data."
@@ -207,7 +207,7 @@ history:
   count: "&7Displayed transactions: &f{count}"
 
 milestone-gui:
-  no-config: "&7No milestones configured in config.yml."
+  no-config: "&7No milestones configured in milestones.yml."
   status-claimed: "&7Status: &fClaimed"
   status-claimable: "&7Status: &aClaimable"
   status-locked: "&7Status: &cLocked"

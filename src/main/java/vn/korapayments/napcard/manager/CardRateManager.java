@@ -1,8 +1,8 @@
 package vn.korapayments.napcard.manager;
 
 import vn.korapayments.KoraPayments;
+import vn.korapayments.napcard.utils.CardProviderNames;
 
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -46,26 +46,8 @@ public class CardRateManager {
     }
 
     private String normalizeTelco(String telco) {
-        if (telco == null) return "UNKNOWN";
-
-        String normalized = telco.trim()
-                .replace(" ", "")
-                .replace("-", "")
-                .replace(".", "")
-                .toUpperCase(Locale.ROOT);
-
-        if (normalized.equals("MOBI")) return "MOBIFONE";
-        if (normalized.equals("MOBIFONE")) return "MOBIFONE";
-        if (normalized.equals("VINA")) return "VINAPHONE";
-        if (normalized.equals("VINAPHONE")) return "VINAPHONE";
-        if (normalized.equals("VIETTEL")) return "VIETTEL";
-        if (normalized.equals("GATE")) return "GATE";
-        if (normalized.equals("ZING")) return "ZING";
-        if (normalized.equals("VCOIN")) return "VCOIN";
-        if (normalized.equals("GARENA")) return "GARENA";
-        if (normalized.equals("SCOIN")) return "SCOIN";
-
-        return normalized;
+        String normalized = CardProviderNames.normalizeRateKey(telco);
+        return normalized.isBlank() ? "UNKNOWN" : normalized;
     }
 
     private double getConfigFallback(String telco, int amount) {
@@ -92,18 +74,18 @@ public class CardRateManager {
     }
 
     private boolean getBooleanCompat(String primaryPath, String legacyPath, boolean fallback) {
-        if (plugin.getConfig().contains(primaryPath)) {
-            return plugin.getConfig().getBoolean(primaryPath, fallback);
+        if (plugin.config().contains(primaryPath)) {
+            return plugin.config().getBoolean(primaryPath, fallback);
         }
-        return plugin.getConfig().getBoolean(legacyPath, fallback);
+        return plugin.config().getBoolean(legacyPath, fallback);
     }
 
     private Double getDoubleCompat(String primaryPath, String legacyPath) {
-        if (plugin.getConfig().contains(primaryPath)) {
-            return plugin.getConfig().getDouble(primaryPath, 0.0);
+        if (plugin.config().contains(primaryPath)) {
+            return plugin.config().getDouble(primaryPath, 0.0);
         }
-        if (plugin.getConfig().contains(legacyPath)) {
-            return plugin.getConfig().getDouble(legacyPath, 0.0);
+        if (plugin.config().contains(legacyPath)) {
+            return plugin.config().getDouble(legacyPath, 0.0);
         }
         return null;
     }

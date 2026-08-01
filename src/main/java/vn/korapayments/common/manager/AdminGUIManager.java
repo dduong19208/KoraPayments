@@ -58,7 +58,7 @@ public class AdminGUIManager {
                 Material.CHEST,
                 plugin.tr("gui.card-config"),
                 "§8Cấu hình hiện tại",
-                "§7Provider: §f" + plugin.getConfig().getString("napthe.provider", "card2k"),
+                "§7Provider: §f" + plugin.getCardProviderName(),
                 "§7" + plugin.trPlain("admin-gui.card-tax-mode") + ": §f" + (plugin.isCardTaxesEnabled() ? plugin.trPlain("general.enabled") : plugin.trPlain("general.disabled")),
                 "§7Nguồn tỷ lệ: §f" + plugin.getCardRateManager().getLastFetchInfo()
         ));

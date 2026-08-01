@@ -53,7 +53,7 @@ public final class LanguageManager {
     }
 
     public void reload() {
-        String configured = plugin.getConfig().getString("language", DEFAULT_LANGUAGE);
+        String configured = plugin.config().getString("language", DEFAULT_LANGUAGE);
         if (configured == null || configured.isBlank()) {
             configured = DEFAULT_LANGUAGE;
         }

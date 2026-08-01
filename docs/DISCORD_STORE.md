@@ -117,7 +117,13 @@ products:
 
 ## Slash command staff
 
-Discord command:
+Discord command đăng storefront:
+
+```text
+/taokenhbanhang
+```
+
+Discord command kiểm tra đơn:
 
 ```text
 /kora-admin kiemtramadon <ma-don>

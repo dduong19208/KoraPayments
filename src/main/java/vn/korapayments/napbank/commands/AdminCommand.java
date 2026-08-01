@@ -7,6 +7,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import vn.korapayments.KoraPayments;
+import vn.korapayments.common.manager.DatabaseMigration;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -104,6 +105,28 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(plugin.tr("admin.reset-invalid"));
                 return true;
             }
+            case "migrate-database", "migratedb" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(plugin.tr("admin.migrate-db-usage"));
+                    return true;
+                }
+                String sourceType = args[1].toLowerCase(Locale.ROOT);
+                String sourceConfig = args.length >= 3 ? args[2] : "";
+                sender.sendMessage(plugin.tr("admin.migrate-db-start", "source", sourceType));
+                plugin.getPlatformScheduler().runAsync(() -> {
+                    DatabaseMigration.MigrationResult result = DatabaseMigration.migrate(plugin, sourceType, sourceConfig,
+                            message -> plugin.getPlatformScheduler().runGlobal(() -> sender.sendMessage(
+                                    plugin.tr("admin.migrate-db-progress", "message", message))));
+                    plugin.getPlatformScheduler().runGlobal(() -> {
+                        if (result.success()) {
+                            sender.sendMessage(plugin.tr("admin.migrate-db-success", "message", result.message()));
+                        } else {
+                            sender.sendMessage(plugin.tr("admin.migrate-db-failed", "message", result.message()));
+                        }
+                    });
+                });
+                return true;
+            }
             default -> {
                 sender.sendMessage(plugin.tr("general.command-not-found"));
                 return true;
@@ -117,7 +140,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 1) {
             return filter(List.of(
-                    "help", "gui", "status", "reload", "napthucong", "lichsunap", "reset", "mocnap"
+                    "help", "gui", "status", "reload", "napthucong", "lichsunap", "reset", "mocnap", "migrate-database"
             ), args[0]);
         }
 
@@ -128,6 +151,10 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 3 && sub.equals("napthucong")) {
             return filter(List.of("10000", "20000", "50000", "100000", "200000", "500000"), args[2]);
+        }
+
+        if (args.length == 2 && (sub.equals("migrate-database") || sub.equals("migratedb"))) {
+            return filter(List.of("sqlite"), args[1]);
         }
 
         if (sub.equals("reset")) {
@@ -159,13 +186,13 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         String platform = plugin.getPlatformScheduler().getPlatformName();
         String language = plugin.getLanguageManager().getLanguageCode();
 
-        String bankProvider = plugin.getConfig().getString("napbank.provider", "sepay");
-        String cardProvider = plugin.getConfig().getString("napthe.provider", "card2k");
+        String bankProvider = plugin.getBankProviderName();
+        String cardProvider = plugin.getCardProviderName();
 
-        int pollEvery = plugin.getConfig().getInt("napbank.poll-every-seconds", 10);
-        int timeout = plugin.getConfig().getInt("napbank.timeout-seconds", 600);
+        int pollEvery = plugin.config().getInt("napbank.poll-every-seconds", 10);
+        int timeout = plugin.config().getInt("napbank.timeout-seconds", 600);
 
-        boolean webhook = plugin.getConfig().getBoolean("discord-webhook.enabled", false);
+        boolean webhook = plugin.config().getBoolean("discord-webhook.enabled", false);
         boolean placeholder = org.bukkit.Bukkit.getPluginManager().isPluginEnabled("PlaceholderAPI");
 
         for (String line : plugin.trList(

@@ -9,6 +9,7 @@ import org.bukkit.FireworkEffect;
 import org.bukkit.Location;
 import org.bukkit.Sound;
 import org.bukkit.command.CommandSender;
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Firework;
 import org.bukkit.entity.Player;
@@ -19,9 +20,13 @@ import org.bukkit.event.server.PluginEnableEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bstats.bukkit.Metrics;
+import vn.korapayments.common.config.ConfigurationManager;
+import vn.korapayments.common.economy.EconomyManager;
+import vn.korapayments.common.interfaceui.ModernPaymentInterfaceManager;
 import vn.korapayments.common.lang.LanguageManager;
 import vn.korapayments.common.manager.AdminGUIManager;
 import vn.korapayments.common.manager.DatabaseManager;
+import vn.korapayments.common.manager.GuiConfigManager;
 import vn.korapayments.common.manager.LogManager;
 import vn.korapayments.common.manager.MilestoneGUIManager;
 import vn.korapayments.common.manager.MilestoneManager;
@@ -40,7 +45,9 @@ import vn.korapayments.napbank.manager.BankPaymentManager;
 import vn.korapayments.napcard.commands.CancelCardCommand;
 import vn.korapayments.napcard.commands.ConfirmCardCommand;
 import vn.korapayments.napcard.commands.NapTheCommand;
+import vn.korapayments.napcard.api.CardChargingService;
 import vn.korapayments.napcard.listeners.CardListener;
+import vn.korapayments.napcard.manager.CardFlowManager;
 import vn.korapayments.napcard.manager.CardRateManager;
 import vn.korapayments.napcard.manager.CardSessionManager;
 import vn.korapayments.napcard.models.CardRequest;
@@ -61,6 +68,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
 public class KoraPayments extends JavaPlugin {
@@ -70,20 +78,28 @@ public class KoraPayments extends JavaPlugin {
 
     private static KoraPayments instance;
 
+    private ConfigurationManager configurationManager;
     private PlatformScheduler platformScheduler;
+    private EconomyManager economyManager;
     private LanguageManager languageManager;
+    private GuiConfigManager guiConfigManager;
     private DatabaseManager databaseManager;
     private MilestoneManager milestoneManager;
     private BankPaymentManager bankPaymentManager;
     private LogManager logManager;
     private AdminGUIManager adminGUIManager;
     private CardSessionManager cardSessionManager;
+    private CardFlowManager cardFlowManager;
     private CardListener cardListener;
     private CardRateManager cardRateManager;
+    private CardChargingService cardChargingService;
     private MilestoneGUIManager milestoneGuiManager;
     private PaymentGUIManager paymentGuiManager;
+    private ModernPaymentInterfaceManager modernPaymentInterfaceManager;
     private TransactionWebhookManager transactionWebhookManager;
     private StoreManager storeManager;
+    private Metrics metrics;
+    private PlatformScheduler.ScheduledTask pendingCardCheckTask;
     private final List<KPExpansion> placeholderExpansions = new ArrayList<>();
     private static final int WEBHOOK_CONNECT_TIMEOUT_MS = 5000;
     private static final int WEBHOOK_READ_TIMEOUT_MS = 10000;
@@ -94,10 +110,14 @@ public class KoraPayments extends JavaPlugin {
     public void onEnable() {
         instance = this;
         saveDefaultConfig();
+        this.configurationManager = new ConfigurationManager(this);
+        this.configurationManager.load();
 
         this.platformScheduler = new PlatformScheduler(this);
         this.logManager = new LogManager(this);
         this.languageManager = new LanguageManager(this);
+        this.guiConfigManager = new GuiConfigManager(this);
+        this.economyManager = new EconomyManager(this);
 
         this.databaseManager = new DatabaseManager(this);
         this.milestoneManager = new MilestoneManager(this);
@@ -105,9 +125,12 @@ public class KoraPayments extends JavaPlugin {
         this.adminGUIManager = new AdminGUIManager(this);
         this.cardSessionManager = new CardSessionManager();
         this.cardListener = new CardListener(this);
+        this.cardFlowManager = new CardFlowManager(this);
         this.cardRateManager = new CardRateManager(this);
+        this.cardChargingService = new CardChargingService(this);
         this.milestoneGuiManager = new MilestoneGUIManager(this);
         this.paymentGuiManager = new PaymentGUIManager(this);
+        this.modernPaymentInterfaceManager = new ModernPaymentInterfaceManager(this);
         this.transactionWebhookManager = new TransactionWebhookManager(this);
         this.storeManager = new StoreManager(this);
 
@@ -122,37 +145,93 @@ public class KoraPayments extends JavaPlugin {
         registerPlaceholderExpansion();
         platformScheduler.runGlobalLater(this::registerPlaceholderExpansion, 40L);
 
-        platformScheduler.runTimerAsync(new CheckPendingTask(this), 1200L, 1200L);
+        this.pendingCardCheckTask = platformScheduler.runTimerAsync(new CheckPendingTask(this), 1200L, 1200L);
 
         printStartupBanner();
     }
 
     @Override
     public void onDisable() {
-        unregisterPlaceholderExpansions();
-        if (milestoneManager != null) {
-            milestoneManager.shutdown();
+        try {
+            safelyShutdown("pending card timer", () -> {
+                if (pendingCardCheckTask != null) pendingCardCheckTask.cancel();
+                pendingCardCheckTask = null;
+            });
+
+            // Stop network clients BEFORE the scheduler and class loader start unloading.
+            // JDA WebSocket callback threads must finish while plugin classes are still available;
+            // otherwise Leaf/Paper/Folia report "zip file closed" during shutdown.
+            safelyShutdown("Discord Store", () -> {
+                if (storeManager != null) storeManager.shutdown();
+            });
+
+            // Allow JDA daemon threads a brief window to observe the shutdown signal and
+            // exit cleanly before the classloader starts unloading plugin classes.
+            // This is critical on Leaf/Folia where async schedulers may still reference plugin classes.
+            if (platformScheduler != null && platformScheduler.isFolia()) {
+                try {
+                    Thread.sleep(800L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+
+            safelyShutdown("bank payment manager", () -> {
+                if (bankPaymentManager != null) bankPaymentManager.shutdown();
+            });
+            safelyShutdown("card-provider HTTP client", () -> {
+                if (cardChargingService != null) cardChargingService.shutdown();
+            });
+
+            // Folia needs its entity schedulers alive while BossBar viewers are detached.
+            safelyShutdown("milestone manager", () -> {
+                if (milestoneManager != null) milestoneManager.shutdown();
+            });
+            safelyShutdown("PlaceholderAPI expansions", this::unregisterPlaceholderExpansions);
+            safelyShutdown("bStats", () -> {
+                if (metrics != null) metrics.shutdown();
+                metrics = null;
+            });
+            safelyShutdown("platform scheduler", () -> {
+                if (platformScheduler != null) platformScheduler.beginShutdown();
+            });
+            safelyShutdown("background task drain", () -> {
+                if (platformScheduler != null && !platformScheduler.awaitQuiescence(18_000L)) {
+                    getLogger().warning("Some background jobs did not finish before the shutdown safety timeout.");
+                }
+            });
+            safelyShutdown("database pool", () -> {
+                if (databaseManager != null) databaseManager.close();
+            });
+            safelyShutdown("log writer", () -> {
+                if (logManager != null) logManager.shutdown();
+            });
+        } finally {
+            pendingCards.clear();
+            instance = null;
         }
-        if (storeManager != null) {
-            storeManager.shutdown();
-        }
-        if (logManager != null) {
-            logManager.shutdown();
+    }
+
+    private void safelyShutdown(String component, Runnable action) {
+        try {
+            action.run();
+        } catch (Throwable throwable) {
+            getLogger().log(Level.WARNING, "Could not fully stop " + component + ".", throwable);
         }
     }
 
     private void printStartupBanner() {
-        if (!getConfig().getBoolean("startup-banner.enabled", true)) {
+        if (!config().getBoolean("startup-banner.enabled", true)) {
             return;
         }
 
         String version = getDescription().getVersion();
         String author = resolvePluginAuthor();
-        String serverName = getServer().getName();
+        String serverName = platformScheduler == null ? resolveServerBrand() : platformScheduler.getPlatformName();
         String serverVersion = getServer().getBukkitVersion();
 
         boolean placeholderApiEnabled = getServer().getPluginManager().isPluginEnabled("PlaceholderAPI");
-        boolean metricsEnabled = getConfig().getBoolean("metrics.enabled", true);
+        boolean metricsEnabled = config().getBoolean("metrics.enabled", true);
 
         final String reset = "\u001B[0m";
         final String cyan = "\u001B[96m";
@@ -179,6 +258,10 @@ public class KoraPayments extends JavaPlugin {
         getLogger().info(yellow + " Author   " + white + author + reset);
         getLogger().info(yellow + " Discord  " + white + SUPPORT_DISCORD + reset);
         getLogger().info(yellow + " Platform " + white + serverName + " / " + serverVersion + reset);
+        getLogger().info(yellow + " Database " + white
+                + (databaseManager == null ? "Unavailable" : databaseManager.getBackendName()) + reset);
+        getLogger().info(yellow + " Economy  " + white
+                + (economyManager == null ? "Command" : economyManager.getResolvedProviderName()) + reset);
         getLogger().info(yellow + " Modules  " + white + "Bank, Card, Milestones, Promotion, Discord Store" + reset);
         getLogger().info(yellow + " Hooks    " + white + "PlaceholderAPI: "
                 + statusText(placeholderApiEnabled, green, red, reset)
@@ -216,13 +299,13 @@ public class KoraPayments extends JavaPlugin {
     }
 
     private void startMetrics() {
-        if (!getConfig().getBoolean("metrics.enabled", true)) {
+        if (!config().getBoolean("metrics.enabled", true)) {
             logDebug("bStats metrics are disabled in config.yml.");
             return;
         }
 
         try {
-            new Metrics(this, BSTATS_PLUGIN_ID);
+            this.metrics = new Metrics(this, BSTATS_PLUGIN_ID);
             logInfo("bStats metrics started with plugin ID " + BSTATS_PLUGIN_ID + ".");
         } catch (Throwable throwable) {
             logWarning("Could not start bStats metrics: " + throwable.getMessage());
@@ -287,6 +370,16 @@ public class KoraPayments extends JavaPlugin {
                 if (event.getPlugin() != null
                         && "PlaceholderAPI".equalsIgnoreCase(event.getPlugin().getName())) {
                     registerPlaceholderExpansion();
+                }
+                if (event.getPlugin() != null && economyManager != null) {
+                    String name = event.getPlugin().getName();
+                    if ("Vault".equalsIgnoreCase(name)
+                            || "PlayerPoints".equalsIgnoreCase(name)
+                            || "FancyEco".equalsIgnoreCase(name)
+                            || "FancyEconomy".equalsIgnoreCase(name)
+                            || "FancyEconomyCore".equalsIgnoreCase(name)) {
+                        economyManager.reload();
+                    }
                 }
             }
         }, this);
@@ -548,8 +641,7 @@ public class KoraPayments extends JavaPlugin {
         getDatabaseManager().addTransaction(playerName, amount, safeChannel, provider, detail);
         clearPlaceholderCaches();
 
-        Player player = Bukkit.getPlayer(playerName);
-        getMilestoneManager().handleSuccessfulPayment(player, amount);
+        routeSuccessfulPaymentMilestones(playerName, amount);
 
         getLogManager().payment(playerName + " topup " + amount + " " + trPlain("general.currency")
                 + " via " + safeChannel.storageKey() + (provider == null || provider.isBlank() ? "" : " (" + provider + ")"));
@@ -559,36 +651,80 @@ public class KoraPayments extends JavaPlugin {
         }
     }
 
+    private void routeSuccessfulPaymentMilestones(String playerName, long amount) {
+        Player player = Bukkit.getPlayerExact(playerName);
+        if (player == null) {
+            if (!platformScheduler.runGlobal(() -> getMilestoneManager().handleSuccessfulPayment(null, amount))) {
+                logWarning("Could not schedule milestone refresh for offline player " + playerName + ".");
+            }
+            return;
+        }
+
+        AtomicBoolean routed = new AtomicBoolean(false);
+        Runnable retired = () -> {
+            if (!routed.compareAndSet(false, true)) return;
+            if (!platformScheduler.runGlobal(() -> getMilestoneManager().handleSuccessfulPayment(null, amount))) {
+                logWarning("Could not schedule milestone refresh after player " + playerName + " disconnected.");
+            }
+        };
+        boolean scheduled = platformScheduler.runPlayer(player, () -> {
+            if (!routed.compareAndSet(false, true)) return;
+            getMilestoneManager().handleSuccessfulPayment(player.isOnline() ? player : null, amount);
+        }, retired);
+        if (!scheduled) {
+            retired.run();
+        }
+    }
+
     public void processManualTopup(CommandSender sender, Player target, long amount) {
         if (amount <= 0) {
             sender.sendMessage(tr("admin.amount-positive"));
             return;
         }
 
+        String senderName = sender.getName();
+        String targetName = target.getName();
         int finalPoints = calculateFinalPoints(amount, PaymentChannel.MANUAL);
         int bonusPoints = calculateBonusPoints(amount, PaymentChannel.MANUAL);
-        String commandTemplate = getConfig().getString("reward-command", "p give {player} {points}");
-        String command = commandTemplate
-                .replace("{player}", target.getName())
-                .replace("{points}", String.valueOf(finalPoints));
 
-        platformScheduler.runPlayer(target, () -> {
-            dispatchConsoleCommand(command);
-            sendActionBar(target, tr("manual.success-actionbar"));
-            broadcast(tr("manual.broadcast", "player", target.getName(), "amount", formatMoney(amount)));
-            target.sendMessage(tr("manual.target-amount", "amount", formatMoney(amount)));
-            target.sendMessage(tr("manual.target-points", "points", formatMoney(finalPoints)));
-            if (bonusPoints > 0) {
-                target.sendMessage(tr("promotion.bonus-channel", "bonus", getPromotionPercent(PaymentChannel.MANUAL), "type", trPlain(PaymentChannel.MANUAL.languageKey())));
+        boolean scheduled = platformScheduler.runGlobal(() -> {
+            EconomyManager.DeliveryResult delivery = economyManager.deliverBankOrManual(
+                    targetName, finalPoints, amount, PaymentChannel.MANUAL);
+            if (!delivery.success()) {
+                logSevere("Manual reward delivery failed for " + targetName + " via "
+                        + delivery.provider() + ": " + delivery.failureReason());
+                sendMessageSafely(sender, tr("manual.reward-failed", "player", targetName));
+                platformScheduler.runPlayer(target,
+                        () -> target.sendMessage(tr("general.reward-failed")));
+                return;
             }
-            spawnSuccessFirework(target.getLocation());
-            target.playSound(target.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
-            processSuccessPayment(target.getName(), amount, PaymentChannel.MANUAL, "admin", "Admin: " + sender.getName());
-            getLogManager().manual(sender.getName() + " manual topup for " + target.getName()
-                    + ", amount " + amount + " " + trPlain("general.currency") + ", points " + finalPoints + ".");
-            sender.sendMessage(tr("manual.sender-success", "player", target.getName(), "amount", formatMoney(amount)));
-            sender.sendMessage(tr("manual.sender-points", "points", formatMoney(finalPoints)));
+
+            processSuccessPayment(targetName, amount, PaymentChannel.MANUAL,
+                    "admin", "Admin: " + senderName + " | Economy: " + delivery.provider());
+            getLogManager().manual(senderName + " manual topup for " + targetName
+                    + ", amount " + amount + " " + trPlain("general.currency") + ", points " + finalPoints
+                    + ", economy " + delivery.provider() + ".");
+            sendMessageSafely(sender,
+                    tr("manual.sender-success", "player", targetName, "amount", formatMoney(amount)));
+            sendMessageSafely(sender, tr("manual.sender-points", "points", formatMoney(finalPoints)));
+
+            platformScheduler.runPlayer(target, () -> {
+                sendActionBar(target, tr("manual.success-actionbar"));
+                broadcast(tr("manual.broadcast", "player", targetName, "amount", formatMoney(amount)));
+                target.sendMessage(tr("manual.target-amount", "amount", formatMoney(amount)));
+                target.sendMessage(tr("manual.target-points", "points", formatMoney(finalPoints)));
+                if (bonusPoints > 0) {
+                    target.sendMessage(tr("promotion.bonus-channel",
+                            "bonus", getPromotionPercent(PaymentChannel.MANUAL),
+                            "type", trPlain(PaymentChannel.MANUAL.languageKey())));
+                }
+                spawnSuccessFirework(target.getLocation());
+                target.playSound(target.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+            });
         });
+        if (!scheduled) {
+            sender.sendMessage(tr("manual.reward-failed", "player", targetName));
+        }
     }
 
     public void handleCardResponse(Player player, int status, String message, CardRequest card) {
@@ -605,6 +741,7 @@ public class KoraPayments extends JavaPlugin {
     }
 
     public void giveCardReward(Player player, CardRequest card) {
+        String playerName = player.getName();
         int amount = card.getAmount();
         double taxRate = isCardTaxesEnabled() ? cardRateManager.getDiscountRate(card.getTelco(), amount) : 0;
         int netAmount = (int) (amount * (1.0 - (taxRate / 100.0)));
@@ -613,31 +750,44 @@ public class KoraPayments extends JavaPlugin {
         int bonusPoints = calculatePromotionBonusFromBasePoints(basePoints, PaymentChannel.CARD);
         int points = basePoints + bonusPoints;
 
-        logCardTransaction(player.getName(), amount, netAmount, points);
+        boolean scheduled = platformScheduler.runGlobal(() -> {
+            EconomyManager.DeliveryResult delivery = economyManager.deliverCard(
+                    playerName, points, amount, netAmount, getCardRewardCommands());
+            logCardTransaction(playerName + (delivery.success() ? "" : " (REWARD_FAILED)"),
+                    amount, netAmount, points);
+            processSuccessPayment(playerName, amount, PaymentChannel.CARD, getCardProviderName(),
+                    "Telco: " + card.getTelco() + " | Net: " + netAmount + " | Request: " + card.getRequestId()
+                            + " | Economy: " + delivery.provider()
+                            + " | Reward: " + (delivery.success() ? "DELIVERED" : "FAILED"));
 
-        platformScheduler.runPlayer(player, () -> {
-            for (String commandTemplate : getCardRewardCommands()) {
-                String command = commandTemplate
-                        .replace("%player%", player.getName())
-                        .replace("%amount%", String.valueOf(amount))
-                        .replace("%net_amount%", String.valueOf(netAmount))
-                        .replace("%points%", String.valueOf(points));
-                dispatchConsoleCommand(command);
+            if (!delivery.success()) {
+                logSevere("Card payment was confirmed but reward delivery failed for " + playerName
+                        + " via " + delivery.provider() + ": " + delivery.failureReason());
+                platformScheduler.runPlayer(player,
+                        () -> player.sendMessage(tr("card.reward-failed")));
+                return;
             }
 
-            sendActionBar(player, tr("card.success-actionbar"));
-            broadcast(tr("card.success-broadcast", "player", player.getName(), "amount", formatMoney(amount)));
-            player.sendMessage(tr("card.success-received", "telco", card.getTelco(), "amount", formatMoney(amount)));
-            player.sendMessage(tr("card.success-points", "points", formatMoney(points)));
-            if (bonusPoints > 0) {
-                player.sendMessage(tr("promotion.bonus-channel", "bonus", getPromotionPercent(PaymentChannel.CARD), "type", trPlain(PaymentChannel.CARD.languageKey())));
-            }
+            platformScheduler.runPlayer(player, () -> {
+                sendActionBar(player, tr("card.success-actionbar"));
+                broadcast(tr("card.success-broadcast",
+                        "player", playerName, "amount", formatMoney(amount)));
+                player.sendMessage(tr("card.success-received",
+                        "telco", card.getTelco(), "amount", formatMoney(amount)));
+                player.sendMessage(tr("card.success-points", "points", formatMoney(points)));
+                if (bonusPoints > 0) {
+                    player.sendMessage(tr("promotion.bonus-channel",
+                            "bonus", getPromotionPercent(PaymentChannel.CARD),
+                            "type", trPlain(PaymentChannel.CARD.languageKey())));
+                }
 
-            spawnSuccessFirework(player.getLocation());
-            player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
-            processSuccessPayment(player.getName(), amount, PaymentChannel.CARD, getCardProviderName(),
-                    "Telco: " + card.getTelco() + " | Net: " + netAmount + " | Request: " + card.getRequestId());
+                spawnSuccessFirework(player.getLocation());
+                player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+            });
         });
+        if (!scheduled) {
+            player.sendMessage(tr("card.reward-failed"));
+        }
     }
 
     public void spawnSuccessFirework(Location location) {
@@ -672,9 +822,13 @@ public class KoraPayments extends JavaPlugin {
 
     public boolean reloadPlugin() {
         saveDefaultConfig();
-        reloadConfig();
+        super.reloadConfig();
+        if (configurationManager != null) configurationManager.reload();
         if (logManager != null) logManager.reloadSettings();
         if (languageManager != null) languageManager.reload();
+        if (guiConfigManager != null) guiConfigManager.reload();
+        if (economyManager != null) economyManager.reload();
+        if (modernPaymentInterfaceManager != null) modernPaymentInterfaceManager.reload();
         if (milestoneManager != null) milestoneManager.reload();
 
         if (cardRateManager != null && isCardTaxesEnabled()) {
@@ -686,6 +840,17 @@ public class KoraPayments extends JavaPlugin {
         }
 
         return true;
+    }
+
+    public FileConfiguration config() {
+        if (configurationManager != null) {
+            return configurationManager.config();
+        }
+        return super.getConfig();
+    }
+
+    public ConfigurationManager getConfigurationManager() {
+        return configurationManager;
     }
 
     public boolean ensureFeatureAvailable(CommandSender sender) {
@@ -702,24 +867,46 @@ public class KoraPayments extends JavaPlugin {
     }
 
     public List<String> getCardRewardCommands() {
-        List<String> commands = getConfig().getStringList("napthe.rewards.commands");
+        List<String> commands = config().getStringList("napthe.rewards.commands");
         if (!commands.isEmpty()) return commands;
-        return getConfig().getStringList("card2k.rewards.commands");
+        return config().getStringList("card2k.rewards.commands");
+    }
+
+    /**
+     * Returns the selected bank provider from the new, easy-to-find config.yml
+     * section while retaining the old payments.yml key as a compatibility
+     * fallback for upgraded installations.
+     */
+    public String getBankProviderName() {
+        return getProviderCompat("providers.bank", "napbank.provider", "payos");
     }
 
     public String getCardProviderName() {
-        String provider = getConfig().getString("napthe.provider", "card2k");
-        return provider == null || provider.isBlank() ? "card2k" : provider.trim().toLowerCase(java.util.Locale.ROOT);
+        return getProviderCompat("providers.card", "napthe.provider", "card2k");
+    }
+
+    public String getEconomyProviderName() {
+        return getProviderCompat("providers.economy", "economy.provider", "command");
+    }
+
+    private String getProviderCompat(String primaryPath, String legacyPath, String fallback) {
+        String provider = config().getString(primaryPath);
+        if (provider == null || provider.isBlank()) {
+            provider = config().getString(legacyPath, fallback);
+        }
+        return provider == null || provider.isBlank()
+                ? fallback
+                : provider.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     private boolean getBooleanCompat(String primaryPath, String legacyPath, boolean fallback) {
-        if (getConfig().contains(primaryPath)) return getConfig().getBoolean(primaryPath, fallback);
-        return getConfig().getBoolean(legacyPath, fallback);
+        if (config().contains(primaryPath)) return config().getBoolean(primaryPath, fallback);
+        return config().getBoolean(legacyPath, fallback);
     }
 
     private int getIntCompat(String primaryPath, String legacyPath, int fallback) {
-        if (getConfig().contains(primaryPath)) return getConfig().getInt(primaryPath, fallback);
-        return getConfig().getInt(legacyPath, fallback);
+        if (config().contains(primaryPath)) return config().getInt(primaryPath, fallback);
+        return config().getInt(legacyPath, fallback);
     }
 
     public int calculateFinalPoints(long amount) {
@@ -732,7 +919,7 @@ public class KoraPayments extends JavaPlugin {
     }
 
     public int calculateBankBasePoints(long amount) {
-        int rate = Math.max(0, getConfig().getInt("conversion-rate", 1));
+        int rate = Math.max(0, config().getInt("conversion-rate", 1));
         long points = (amount / 1000L) * rate;
         return points > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(0L, points);
     }
@@ -761,11 +948,11 @@ public class KoraPayments extends JavaPlugin {
 
     public boolean isPromotionActive(PaymentChannel channel) {
         String path = resolvePromotionPath(channel);
-        if (!getConfig().getBoolean(path + ".enabled", false)) return false;
+        if (!config().getBoolean(path + ".enabled", false)) return false;
         try {
             SimpleDateFormat sdf = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss");
             sdf.setLenient(false);
-            String rawEndDate = getConfig().getString(path + ".end-date", "01/01/2000 00:00:00");
+            String rawEndDate = config().getString(path + ".end-date", "01/01/2000 00:00:00");
             return new Date().before(sdf.parse(rawEndDate));
         } catch (Exception e) {
             logWarning("Invalid " + path + ".end-date. Expected format: dd/MM/yyyy HH:mm:ss");
@@ -774,7 +961,7 @@ public class KoraPayments extends JavaPlugin {
     }
 
     public int getPromotionPercent(PaymentChannel channel) {
-        return Math.max(0, getConfig().getInt(resolvePromotionPath(channel) + ".percent", 0));
+        return Math.max(0, config().getInt(resolvePromotionPath(channel) + ".percent", 0));
     }
 
     private String resolvePromotionPath(PaymentChannel channel) {
@@ -783,11 +970,11 @@ public class KoraPayments extends JavaPlugin {
             return "napthe.promotion";
         }
 
-        if (getConfig().contains("napbank.promotion")) {
+        if (config().contains("napbank.promotion")) {
             return "napbank.promotion";
         }
 
-        if (getConfig().contains("promotion")) {
+        if (config().contains("promotion")) {
             return "promotion";
         }
 
@@ -801,6 +988,15 @@ public class KoraPayments extends JavaPlugin {
 
     public void broadcast(String message) {
         platformScheduler.runGlobal(() -> Bukkit.broadcastMessage(message));
+    }
+
+    public void sendMessageSafely(CommandSender sender, String message) {
+        if (sender == null) return;
+        if (sender instanceof Player player) {
+            platformScheduler.runPlayer(player, () -> player.sendMessage(message));
+            return;
+        }
+        platformScheduler.runGlobal(() -> sender.sendMessage(message));
     }
 
     public void sendActionBar(Player player, String message) {
@@ -913,18 +1109,23 @@ public class KoraPayments extends JavaPlugin {
 
     public static KoraPayments getInstance() { return instance; }
     public PlatformScheduler getPlatformScheduler() { return platformScheduler; }
+    public EconomyManager getEconomyManager() { return economyManager; }
     public LanguageManager getLanguageManager() { return languageManager; }
+    public GuiConfigManager getGuiConfigManager() { return guiConfigManager; }
     public DatabaseManager getDatabaseManager() { return databaseManager; }
     public MilestoneManager getMilestoneManager() { return milestoneManager; }
     public BankPaymentManager getBankPaymentManager() { return bankPaymentManager; }
     public LogManager getLogManager() { return logManager; }
     public AdminGUIManager getAdminGUIManager() { return adminGUIManager; }
     public CardSessionManager getCardSessionManager() { return cardSessionManager; }
+    public CardFlowManager getCardFlowManager() { return cardFlowManager; }
     public CardListener getCardListener() { return cardListener; }
     public CardRateManager getCardRateManager() { return cardRateManager; }
+    public CardChargingService getCardChargingService() { return cardChargingService; }
     public TransactionWebhookManager getTransactionWebhookManager() { return transactionWebhookManager; }
     public StoreManager getStoreManager() { return storeManager; }
     public MilestoneGUIManager getMilestoneGuiManager() { return milestoneGuiManager; }
     public PaymentGUIManager getPaymentGuiManager() { return paymentGuiManager; }
+    public ModernPaymentInterfaceManager getModernPaymentInterfaceManager() { return modernPaymentInterfaceManager; }
     public Map<UUID, CardRequest> getPendingCards() { return pendingCards; }
 }

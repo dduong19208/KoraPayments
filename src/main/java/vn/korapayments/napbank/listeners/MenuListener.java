@@ -5,10 +5,12 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import vn.korapayments.KoraPayments;
+import vn.korapayments.common.manager.MenuAction;
 import vn.korapayments.common.manager.MenuHolder;
 import vn.korapayments.common.manager.PaymentGUIManager;
 
@@ -58,11 +60,25 @@ public class MenuListener implements Listener {
             }
             case "milestones" -> handleMilestoneClick(player, slot, false);
             case "server_milestones" -> handleMilestoneClick(player, slot, true);
-            case PaymentGUIManager.MENU_CARD_PROVIDER -> handleCardProviderClick(player, menuHolder, slot);
-            case PaymentGUIManager.MENU_CARD_AMOUNT -> handleCardAmountClick(player, menuHolder, slot);
-            case PaymentGUIManager.MENU_BANK_AMOUNT -> handleBankAmountClick(player, menuHolder, slot);
+            case PaymentGUIManager.MENU_CARD_PROVIDER,
+                 PaymentGUIManager.MENU_CARD_AMOUNT,
+                 PaymentGUIManager.MENU_BANK_AMOUNT -> handlePaymentClick(player, menuHolder, slot);
             case "topnap" -> handleTopClick(player, menuHolder, slot);
             default -> {
+                return;
+            }
+        }
+    }
+
+    @EventHandler
+    public void onDrag(InventoryDragEvent event) {
+        Inventory topInventory = event.getView().getTopInventory();
+        if (!(topInventory.getHolder() instanceof MenuHolder)) return;
+
+        int topSize = topInventory.getSize();
+        for (int rawSlot : event.getRawSlots()) {
+            if (rawSlot >= 0 && rawSlot < topSize) {
+                event.setCancelled(true);
                 return;
             }
         }
@@ -103,53 +119,59 @@ public class MenuListener implements Listener {
         }
     }
 
-    private void handleCardProviderClick(Player player, MenuHolder holder, int slot) {
-        if (slot == 40) {
-            player.closeInventory();
-            return;
+    private void handlePaymentClick(Player player, MenuHolder holder, int slot) {
+        MenuHolder.ActionBinding binding = holder.getAction(slot);
+        if (binding == null || binding.action() == MenuAction.NONE) return;
+
+        String payload = binding.payload();
+        switch (binding.action()) {
+            case CLOSE -> player.closeInventory();
+            case OPEN_CARD_PROVIDER -> plugin.getPaymentGuiManager().openCardProviderMenu(player);
+            case OPEN_BANK_MENU -> {
+                player.closeInventory();
+                plugin.getPlatformScheduler().runPlayer(player,
+                        () -> player.performCommand("bank gui"));
+            }
+            case OPEN_CARD_MENU -> {
+                player.closeInventory();
+                plugin.getPlatformScheduler().runPlayer(player,
+                        () -> player.performCommand("napthe gui"));
+            }
+            case OPEN_HISTORY -> {
+                player.closeInventory();
+                plugin.getPlatformScheduler().runPlayer(player,
+                        () -> player.performCommand("lichsunap"));
+            }
+            case OPEN_MILESTONE -> {
+                player.closeInventory();
+                plugin.getPlatformScheduler().runPlayer(player,
+                        () -> player.performCommand("mocnap"));
+            }
+            case OPEN_TOP_NAP -> {
+                player.closeInventory();
+                plugin.getPlatformScheduler().runPlayer(player,
+                        () -> player.performCommand("topnap"));
+            }
+            case SELECT_CARD_PROVIDER -> {
+                if (payload == null || payload.isBlank()) return;
+                plugin.getPaymentGuiManager().openCardAmountMenu(player, payload);
+            }
+            case START_CARD_PAYMENT -> {
+                String telco = holder.getData("telco");
+                if (payload == null || payload.isBlank() || telco == null || telco.isBlank()) return;
+                player.closeInventory();
+                plugin.getPlatformScheduler().runPlayer(player,
+                        () -> player.performCommand("napthe " + telco + " " + payload));
+            }
+            case START_BANK_PAYMENT -> {
+                if (payload == null || payload.isBlank()) return;
+                player.closeInventory();
+                plugin.getPlatformScheduler().runPlayer(player,
+                        () -> player.performCommand("bank " + payload));
+            }
+            case NONE -> {
+            }
         }
-
-        String telco = holder.getSlotValue(slot);
-        if (telco == null || telco.isBlank()) {
-            return;
-        }
-
-        plugin.getPaymentGuiManager().openCardAmountMenu(player, telco);
-    }
-
-    private void handleCardAmountClick(Player player, MenuHolder holder, int slot) {
-        if (slot == 45) {
-            plugin.getPaymentGuiManager().openCardProviderMenu(player);
-            return;
-        }
-        if (slot == 53) {
-            player.closeInventory();
-            return;
-        }
-
-        String amount = holder.getSlotValue(slot);
-        String telco = holder.getData("telco");
-        if (amount == null || amount.isBlank() || telco == null || telco.isBlank()) {
-            return;
-        }
-
-        player.closeInventory();
-        plugin.getPlatformScheduler().runPlayer(player, () -> player.performCommand("napthe " + telco + " " + amount));
-    }
-
-    private void handleBankAmountClick(Player player, MenuHolder holder, int slot) {
-        if (slot == 53) {
-            player.closeInventory();
-            return;
-        }
-
-        String amount = holder.getSlotValue(slot);
-        if (amount == null || amount.isBlank()) {
-            return;
-        }
-
-        player.closeInventory();
-        plugin.getPlatformScheduler().runPlayer(player, () -> player.performCommand("bank " + amount));
     }
 
     private void handleMilestoneClick(Player player, int slot, boolean serverMilestone) {

@@ -6,12 +6,15 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
+import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.core5.http.ContentType;
+import org.apache.hc.core5.http.io.HttpClientResponseHandler;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.http.io.entity.StringEntity;
+import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.util.Timeout;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -19,10 +22,13 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.MapMeta;
 import vn.korapayments.KoraPayments;
 import vn.korapayments.common.model.PaymentChannel;
+import vn.korapayments.common.economy.EconomyManager;
 import vn.korapayments.common.scheduler.PlatformScheduler.ScheduledTask;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.math.BigDecimal;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +42,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class BankPaymentManager {
@@ -46,17 +53,56 @@ public class BankPaymentManager {
     private static final String QUICK_CHART_QR_API = "https://quickchart.io/qr";
 
     private final KoraPayments plugin;
-    private final Map<UUID, ScheduledTask> activeTasks = new ConcurrentHashMap<>();
+    private final CloseableHttpClient httpClient;
+    private final Object callbackLock = new Object();
+    private final Set<HttpUriRequestBase> activeHttpRequests = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, PollingSession> activeTasks = new ConcurrentHashMap<>();
     private final Map<Long, TransactionState> pendingStates = new ConcurrentHashMap<>();
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     // BỘ NHỚ ĐỆM BẢO MẬT: Lưu trữ ID giao dịch SePay đã xử lý để chống replay attack.
     private final Set<String> processedSePayTransactions = ConcurrentHashMap.newKeySet();
 
     public BankPaymentManager(KoraPayments plugin) {
         this.plugin = plugin;
+        this.httpClient = createHttpClient();
     }
 
     private record TransactionState(String provider, String description, long createdAtMillis) {}
+
+    private record PaymentMatch(boolean paid, String transactionId) {
+        private static final PaymentMatch UNPAID = new PaymentMatch(false, "");
+
+        private PaymentMatch {
+            transactionId = transactionId == null ? "" : transactionId;
+        }
+    }
+
+    private static final class PollingSession {
+        private final UUID playerId;
+        private final String playerName;
+        private final long orderCode;
+        private final long amount;
+        private final int mapId;
+        private final TransactionState state;
+        private final AtomicBoolean terminal = new AtomicBoolean(false);
+        private final AtomicBoolean requestInFlight = new AtomicBoolean(false);
+        private final AtomicBoolean rewardStarted = new AtomicBoolean(false);
+        private final AtomicReference<PaymentMatch> confirmedPayment = new AtomicReference<>();
+        private final AtomicReference<ScheduledTask> task = new AtomicReference<>();
+        private final AtomicInteger secondsLeft;
+
+        private PollingSession(Player player, long orderCode, long amount, int mapId,
+                               TransactionState state, int timeoutSeconds) {
+            this.playerId = player.getUniqueId();
+            this.playerName = player.getName();
+            this.orderCode = orderCode;
+            this.amount = amount;
+            this.mapId = mapId;
+            this.state = state;
+            this.secondsLeft = new AtomicInteger(timeoutSeconds);
+        }
+    }
 
     public record PaymentOrder(String provider,
                                long orderCode,
@@ -108,6 +154,9 @@ public class BankPaymentManager {
     }
 
     public void createPaymentOrder(String payerName, long amount, PaymentOrderCallback callback) {
+        if (shuttingDown.get()) {
+            return;
+        }
         String safePayerName = sanitizePayerName(payerName);
         if (PROVIDER_SEPAY.equals(getProvider())) {
             createSePayPaymentOrder(safePayerName, amount, callback);
@@ -118,8 +167,8 @@ public class BankPaymentManager {
 
     private void createPayOSPaymentOrder(String payerName, long amount, PaymentOrderCallback callback) {
         if (!hasPayOSCredentials()) {
-            plugin.logWarning("PayOS createTransaction aborted: missing client-id/api-key/checksum-key in config.yml");
-            callback.onFailure(plugin.tr("bank.payos-missing"));
+            plugin.logWarning("PayOS createTransaction aborted: missing client-id/api-key/checksum-key in providers/payos.yml");
+            notifyFailure(callback, plugin.tr("bank.payos-missing"));
             return;
         }
 
@@ -127,8 +176,8 @@ public class BankPaymentManager {
         String description = buildPaymentDescription("payos.payment-format", payerName, orderCode, "{playername} THANH TOAN", 25);
         pendingStates.put(orderCode, new TransactionState(PROVIDER_PAYOS, description, System.currentTimeMillis()));
 
-        plugin.getPlatformScheduler().runAsync(() -> {
-            try (CloseableHttpClient client = createHttpClient()) {
+        boolean scheduled = plugin.getPlatformScheduler().runAsync(() -> {
+            try {
                 HttpPost post = new HttpPost(PAYOS_PAYMENT_REQUESTS_API);
                 JsonObject body = new JsonObject();
                 body.addProperty("orderCode", orderCode);
@@ -141,31 +190,39 @@ public class BankPaymentManager {
                 post.setHeader("x-api-key", getPayOSApiKey());
                 post.setEntity(new StringEntity(body.toString(), ContentType.APPLICATION_JSON));
 
-                client.execute(post, response -> {
+                executeRequest(post, response -> {
                     String res = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
                     JsonObject json = JsonParser.parseString(res).getAsJsonObject();
                     String code = getJsonString(json, "code", "unknown");
                     if ("00".equals(code)) {
                         JsonObject data = json.has("data") && json.get("data").isJsonObject()
                                 ? json.getAsJsonObject("data") : new JsonObject();
-                        callback.onSuccess(buildPayOSOrder(payerName, amount, orderCode, description, data));
+                        notifySuccess(callback, buildPayOSOrder(payerName, amount, orderCode, description, data));
                         return null;
                     }
 
                     String message = getJsonString(json, "desc", getJsonString(json, "message", "PayOS rejected the transaction"));
-                    plugin.logWarning("PayOS createTransaction failed for " + payerName
-                            + " code=" + code + " message=" + message);
-                    plugin.logDebug("PayOS createTransaction raw response: " + res);
                     pendingStates.remove(orderCode);
-                    callback.onFailure(plugin.tr("bank.create-provider-failed", "message", message, "code", code));
+                    if (!shuttingDown.get()) {
+                        plugin.logWarning("PayOS createTransaction failed for " + payerName
+                                + " code=" + code + " message=" + message);
+                        plugin.logDebug("PayOS createTransaction raw response: " + res);
+                        notifyFailure(callback, plugin.tr("bank.create-provider-failed", "message", message, "code", code));
+                    }
                     return null;
                 });
             } catch (Exception e) {
                 pendingStates.remove(orderCode);
-                plugin.logWarning("PayOS createTransaction crashed for " + payerName, e);
-                callback.onFailure(plugin.tr("bank.create-failed"));
+                if (!shuttingDown.get()) {
+                    plugin.logWarning("PayOS createTransaction crashed for " + payerName, e);
+                    notifyFailure(callback, plugin.tr("bank.create-failed"));
+                }
             }
         });
+        if (!scheduled) {
+            pendingStates.remove(orderCode);
+            notifyFailure(callback, plugin.tr("bank.create-failed"));
+        }
     }
 
     private PaymentOrder buildPayOSOrder(String payerName, long amount, long orderCode, String fallbackDescription, JsonObject data) {
@@ -183,8 +240,8 @@ public class BankPaymentManager {
 
     private void createSePayPaymentOrder(String payerName, long amount, PaymentOrderCallback callback) {
         if (!hasSePayCredentials()) {
-            plugin.logWarning("SePay createTransaction aborted: missing api-token/bank-code/account-number/account-name in config.yml");
-            callback.onFailure(plugin.tr("bank.sepay-missing"));
+            plugin.logWarning("SePay createTransaction aborted: missing api-token/bank-code/account-number/account-name in providers/sepay.yml");
+            notifyFailure(callback, plugin.tr("bank.sepay-missing"));
             return;
         }
 
@@ -207,111 +264,174 @@ public class BankPaymentManager {
                 forceVietQrOnlyUrl(qrUrl),
                 ""
         );
-        callback.onSuccess(order);
+        notifySuccess(callback, order);
     }
 
     public void startPolling(Player player, long orderCode, long amount, int mapId) {
+        if (shuttingDown.get()) return;
         cancelPolling(player);
         TransactionState state = pendingStates.getOrDefault(orderCode,
                 new TransactionState(getProvider(), String.valueOf(orderCode), System.currentTimeMillis()));
-        AtomicBoolean paid = new AtomicBoolean(false);
-        AtomicReference<ScheduledTask> taskReference = new AtomicReference<>();
-        int timeoutSeconds = Math.max(60, plugin.getConfig().getInt("napbank.timeout-seconds", 600));
-        int pollEverySeconds = Math.max(5, plugin.getConfig().getInt("napbank.poll-every-seconds", 10));
-        int[] timeLeft = {timeoutSeconds};
+        int timeoutSeconds = Math.max(60, plugin.config().getInt("napbank.timeout-seconds", 600));
+        int pollEverySeconds = Math.max(5, plugin.config().getInt("napbank.poll-every-seconds", 10));
+        PollingSession session = new PollingSession(player, orderCode, amount, mapId, state, timeoutSeconds);
 
-        Runnable polling = () -> {
-            ScheduledTask self = taskReference.get();
-            if (paid.get()) {
-                cleanupTask(player, orderCode, self);
-                return;
-            }
-
-            if (timeLeft[0] <= 0) {
-                stopAndClean(player, mapId, plugin.tr("bank.expired"), orderCode, self);
-                sendFailureWebhook(player.getName(), amount, "timeout");
-                return;
-            }
-
-            if (!player.isOnline()) {
-                cleanupTask(player, orderCode, self);
-                return;
-            }
-
-            int minutes = timeLeft[0] / 60;
-            int seconds = timeLeft[0] % 60;
-            String timer = String.format("%02d:%02d", minutes, seconds);
-            plugin.sendActionBar(player, plugin.tr("bank.actionbar-scanning",
-                    "time", timer,
-                    "amount", plugin.formatMoney(amount)));
-
-            timeLeft[0]--;
-
-            if (timeLeft[0] % pollEverySeconds == 0) {
-                if (PROVIDER_SEPAY.equals(state.provider())) {
-                    checkSePayPayment(player, orderCode, amount, mapId, self, paid, state);
-                } else {
-                    checkPayOSPayment(player, orderCode, amount, mapId, self, paid, state);
-                }
-            }
-        };
+        Runnable polling = () -> pollPlayerPayment(player, session, pollEverySeconds);
 
         ScheduledTask task = plugin.getPlatformScheduler().runTimerAsync(polling, 1L, 20L);
-        taskReference.set(task);
-        activeTasks.put(player.getUniqueId(), task);
+        session.task.set(task);
+        activeTasks.put(session.playerId, session);
+    }
+
+    private void pollPlayerPayment(Player player, PollingSession session, int pollEverySeconds) {
+        if (shuttingDown.get()) {
+            return;
+        }
+        if (session.confirmedPayment.get() != null) {
+            scheduleConfirmedReward(player, session);
+            return;
+        }
+        if (session.terminal.get()) {
+            return;
+        }
+
+        int remaining = session.secondsLeft.getAndUpdate(current -> current > 0 ? current - 1 : 0);
+        if (remaining <= 0) {
+            // The request started at 00:01 is authoritative. Do not emit a timeout while it is still running.
+            if (!session.requestInFlight.get()) {
+                expirePlayerPayment(player, session);
+            }
+            return;
+        }
+
+        int minutes = remaining / 60;
+        int seconds = remaining % 60;
+        String timer = String.format("%02d:%02d", minutes, seconds);
+        plugin.getPlatformScheduler().runPlayer(player, () -> {
+            if (!shuttingDown.get() && !session.terminal.get() && player.isOnline()) {
+                plugin.sendActionBar(player, plugin.tr("bank.actionbar-scanning",
+                        "time", timer,
+                        "amount", plugin.formatMoney(session.amount)));
+            }
+        });
+
+        int next = remaining - 1;
+        if (next % pollEverySeconds == 0 && session.requestInFlight.compareAndSet(false, true)) {
+            boolean accepted = plugin.getPlatformScheduler().runAsync(() -> {
+                try {
+                    if (shuttingDown.get()) return;
+                    PaymentMatch match = queryPayment(session.orderCode, session.amount, session.state);
+                    if (!shuttingDown.get() && match.paid()) {
+                        markPaymentSuccess(player, session, match);
+                    }
+                } catch (Exception e) {
+                    if (!shuttingDown.get()) {
+                        plugin.logDebug(session.state.provider() + " payment check skipped: " + e.getMessage(), e);
+                    }
+                } finally {
+                    session.requestInFlight.set(false);
+                }
+            });
+            if (!accepted) {
+                session.requestInFlight.set(false);
+            }
+        }
     }
 
     public ScheduledTask startExternalPolling(String ownerKey, long orderCode, long amount, ExternalPaymentCallback callback) {
+        if (shuttingDown.get()) return () -> {};
         TransactionState state = pendingStates.getOrDefault(orderCode,
                 new TransactionState(getProvider(), String.valueOf(orderCode), System.currentTimeMillis()));
         int timeoutSeconds = Math.max(60, plugin.getStoreManager() == null
-                ? plugin.getConfig().getInt("napbank.timeout-seconds", 600)
+                ? plugin.config().getInt("napbank.timeout-seconds", 600)
                 : plugin.getStoreManager().getOrderTimeoutSeconds());
         int pollEverySeconds = Math.max(5, plugin.getStoreManager() == null
-                ? plugin.getConfig().getInt("napbank.poll-every-seconds", 10)
+                ? plugin.config().getInt("napbank.poll-every-seconds", 10)
                 : plugin.getStoreManager().getPollEverySeconds());
-        long expiresAt = System.currentTimeMillis() + timeoutSeconds * 1000L;
+        long now = System.currentTimeMillis();
+        long createdAt = state.createdAtMillis() > 0L && state.createdAtMillis() <= now
+                ? state.createdAtMillis() : now;
+        long timeoutMillis = timeoutSeconds * 1000L;
+        long expiresAt = createdAt > Long.MAX_VALUE - timeoutMillis
+                ? Long.MAX_VALUE : createdAt + timeoutMillis;
         AtomicBoolean completed = new AtomicBoolean(false);
+        AtomicBoolean requestInFlight = new AtomicBoolean(false);
+        AtomicBoolean cancelRequested = new AtomicBoolean(false);
         AtomicReference<ScheduledTask> taskReference = new AtomicReference<>();
+
+        Runnable completeCancellation = () -> {
+            if (completed.compareAndSet(false, true)) {
+                removePendingState(orderCode, state);
+                ScheduledTask current = taskReference.get();
+                if (current != null) current.cancel();
+            }
+        };
 
         Runnable polling = () -> {
             ScheduledTask self = taskReference.get();
+            if (shuttingDown.get()) {
+                if (self != null) self.cancel();
+                return;
+            }
             if (completed.get()) {
                 if (self != null) self.cancel();
                 return;
             }
+            if (cancelRequested.get()) {
+                if (!requestInFlight.get()) completeCancellation.run();
+                return;
+            }
 
             if (System.currentTimeMillis() > expiresAt) {
+                if (requestInFlight.get()) {
+                    return;
+                }
                 if (completed.compareAndSet(false, true)) {
-                    pendingStates.remove(orderCode);
+                    removePendingState(orderCode, state);
                     if (self != null) self.cancel();
-                    callback.onExpired();
+                    notifyExpired(callback);
                 }
                 return;
             }
 
+            if (!requestInFlight.compareAndSet(false, true)) {
+                return;
+            }
             try {
-                boolean paid = PROVIDER_SEPAY.equals(state.provider())
-                        ? isSePayPaid(amount, state)
-                        : isPayOSPaid(orderCode);
-                if (paid && completed.compareAndSet(false, true)) {
-                    pendingStates.remove(orderCode);
+                PaymentMatch match = queryPayment(orderCode, amount, state);
+                if (!shuttingDown.get() && match.paid() && claimPaymentMatch(match, completed)) {
+                    removePendingState(orderCode, state);
                     if (self != null) self.cancel();
-                    callback.onPaid();
+                    boolean accepted = false;
+                    try {
+                        accepted = notifyPaid(callback);
+                    } finally {
+                        if (!accepted) {
+                            if (!match.transactionId().isBlank()) {
+                                processedSePayTransactions.remove(match.transactionId());
+                            }
+                            if (!shuttingDown.get()) {
+                                plugin.logSevere("Confirmed external payment " + orderCode + " for " + ownerKey
+                                        + " was rejected by its owner state; manual reconciliation is required.");
+                            }
+                        }
+                    }
                 }
             } catch (Exception e) {
-                plugin.logDebug("External bank payment polling skipped for " + ownerKey + ": " + e.getMessage(), e);
+                if (!shuttingDown.get()) {
+                    plugin.logDebug("External bank payment polling skipped for " + ownerKey + ": " + e.getMessage(), e);
+                }
+            } finally {
+                requestInFlight.set(false);
+                if (cancelRequested.get()) completeCancellation.run();
             }
         };
 
         ScheduledTask task = plugin.getPlatformScheduler().runTimerAsync(polling, 20L, pollEverySeconds * 20L);
         taskReference.set(task);
         return () -> {
-            if (completed.compareAndSet(false, true)) {
-                pendingStates.remove(orderCode);
-                ScheduledTask current = taskReference.get();
-                if (current != null) current.cancel();
-            }
+            cancelRequested.set(true);
+            if (!requestInFlight.get()) completeCancellation.run();
         };
     }
 
@@ -319,84 +439,76 @@ public class BankPaymentManager {
         pendingStates.remove(orderCode);
     }
 
-    private void checkPayOSPayment(Player player, long orderCode, long amount, int mapId, ScheduledTask task, AtomicBoolean paid, TransactionState state) {
-        try {
-            if (isPayOSPaid(orderCode)) {
-                markPaymentSuccess(player, amount, mapId, task, paid, orderCode, state);
-            }
-        } catch (Exception e) {
-            plugin.logDebug("PayOS checkPayment skipped: " + e.getMessage(), e);
+    public void restoreExternalTransaction(long orderCode, String provider, String description, long createdAtMillis) {
+        if (shuttingDown.get() || orderCode <= 0L) return;
+        String normalizedProvider = PROVIDER_SEPAY.equalsIgnoreCase(provider) ? PROVIDER_SEPAY : PROVIDER_PAYOS;
+        String safeDescription = description == null || description.isBlank()
+                ? String.valueOf(orderCode) : description;
+        long safeCreatedAt = createdAtMillis > 0L ? createdAtMillis : System.currentTimeMillis();
+        pendingStates.putIfAbsent(orderCode,
+                new TransactionState(normalizedProvider, safeDescription, safeCreatedAt));
+    }
+
+    private PaymentMatch queryPayment(long orderCode, long amount, TransactionState state) throws Exception {
+        if (shuttingDown.get()) return PaymentMatch.UNPAID;
+        if (PROVIDER_SEPAY.equals(state.provider())) {
+            return findSePayPayment(amount, state);
         }
+        return new PaymentMatch(isPayOSPaid(orderCode), "");
     }
 
     private boolean isPayOSPaid(long orderCode) throws Exception {
-        try (CloseableHttpClient client = createHttpClient()) {
-            HttpGet get = new HttpGet(PAYOS_PAYMENT_REQUESTS_API + "/" + orderCode);
-            get.setHeader("x-client-id", getPayOSClientId());
-            get.setHeader("x-api-key", getPayOSApiKey());
+        HttpGet get = new HttpGet(PAYOS_PAYMENT_REQUESTS_API + "/" + orderCode);
+        get.setHeader("x-client-id", getPayOSClientId());
+        get.setHeader("x-api-key", getPayOSApiKey());
 
-            return client.execute(get, response -> {
-                String res = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
-                JsonObject json = JsonParser.parseString(res).getAsJsonObject();
-                JsonObject data = json.has("data") && json.get("data").isJsonObject()
-                        ? json.getAsJsonObject("data") : null;
-                return data != null && "PAID".equalsIgnoreCase(getJsonString(data, "status", ""));
-            });
-        }
+        return executeRequest(get, response -> {
+            String res = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
+            JsonObject json = JsonParser.parseString(res).getAsJsonObject();
+            JsonObject data = json.has("data") && json.get("data").isJsonObject()
+                    ? json.getAsJsonObject("data") : null;
+            return data != null && "PAID".equalsIgnoreCase(getJsonString(data, "status", ""));
+        });
     }
 
-    private void checkSePayPayment(Player player, long orderCode, long amount, int mapId,
-                                   ScheduledTask task, AtomicBoolean paid, TransactionState state) {
-        try {
-            if (isSePayPaid(amount, state)) {
-                markPaymentSuccess(player, amount, mapId, task, paid, orderCode, state);
-            }
-        } catch (Exception e) {
-            plugin.logDebug("SePay checkPayment skipped: " + e.getMessage(), e);
-        }
-    }
+    private PaymentMatch findSePayPayment(long amount, TransactionState state) throws Exception {
+        int limit = Math.max(1, Math.min(100, plugin.config().getInt("sepay.transaction-lookup-limit", 20)));
+        String minDate = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date(Math.max(0, state.createdAtMillis() - 60000L)));
+        String url = SEPAY_TRANSACTIONS_API
+                + "?account_number=" + enc(getSePayAccountNumber())
+                + "&amount_in=" + amount
+                + "&limit=" + limit
+                + "&transaction_date_min=" + enc(minDate);
 
-    private boolean isSePayPaid(long amount, TransactionState state) throws Exception {
-        try (CloseableHttpClient client = createHttpClient()) {
-            int limit = Math.max(1, Math.min(100, plugin.getConfig().getInt("sepay.transaction-lookup-limit", 20)));
-            String minDate = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date(Math.max(0, state.createdAtMillis() - 60000L)));
-            String url = SEPAY_TRANSACTIONS_API
-                    + "?account_number=" + enc(getSePayAccountNumber())
-                    + "&amount_in=" + amount
-                    + "&limit=" + limit
-                    + "&transaction_date_min=" + enc(minDate);
+        HttpGet get = new HttpGet(url);
+        get.setHeader("Content-Type", "application/json");
+        get.setHeader("Authorization", "Bearer " + getSePayApiToken());
 
-            HttpGet get = new HttpGet(url);
-            get.setHeader("Content-Type", "application/json");
-            get.setHeader("Authorization", "Bearer " + getSePayApiToken());
-
-            return client.execute(get, response -> {
-                String res = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
-                JsonObject json = JsonParser.parseString(res).getAsJsonObject();
-                if (json.has("transactions") && json.get("transactions").isJsonArray()) {
-                    JsonArray transactions = json.getAsJsonArray("transactions");
-                    for (JsonElement element : transactions) {
-                        if (!element.isJsonObject()) continue;
-                        JsonObject transaction = element.getAsJsonObject();
-                        String transactionId = getJsonString(transaction, "id", getJsonString(transaction, "reference_number", ""));
-                        if (!transactionId.isEmpty() && processedSePayTransactions.contains(transactionId)) {
-                            continue;
-                        }
-
-                        if (isMatchingSePayTransaction(transaction, amount, state.description())) {
-                            if (!transactionId.isEmpty()) {
-                                processedSePayTransactions.add(transactionId);
-                            }
-                            return true;
-                        }
+        return executeRequest(get, response -> {
+            String res = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
+            JsonObject json = JsonParser.parseString(res).getAsJsonObject();
+            if (json.has("transactions") && json.get("transactions").isJsonArray()) {
+                JsonArray transactions = json.getAsJsonArray("transactions");
+                for (JsonElement element : transactions) {
+                    if (!element.isJsonObject()) continue;
+                    JsonObject transaction = element.getAsJsonObject();
+                    String transactionId = getJsonString(transaction, "id", getJsonString(transaction, "reference_number", ""));
+                    if (!transactionId.isEmpty() && processedSePayTransactions.contains(transactionId)) {
+                        continue;
                     }
-                } else if (json.has("status") && json.get("status").getAsInt() != 200) {
+
+                    if (isMatchingSePayTransaction(transaction, amount, state.description())) {
+                        return new PaymentMatch(true, transactionId);
+                    }
+                }
+            } else if (json.has("status") && json.get("status").getAsInt() != 200) {
+                if (!shuttingDown.get()) {
                     plugin.logWarning("SePay transaction lookup failed. Enable logging.debug for raw response.");
                     plugin.logDebug("SePay transaction lookup raw response: " + res);
                 }
-                return false;
-            });
-        }
+            }
+            return PaymentMatch.UNPAID;
+        });
     }
 
     private boolean isMatchingSePayTransaction(JsonObject transaction, long amount, String description) {
@@ -410,68 +522,194 @@ public class BankPaymentManager {
         return !target.isBlank() && (content.contains(target) || code.contains(target) || contentAlt.contains(target));
     }
 
-    private void markPaymentSuccess(Player player, long amount, int mapId, ScheduledTask task, AtomicBoolean paid, long orderCode, TransactionState state) {
-        if (paid.compareAndSet(false, true)) {
-            executeSuccess(player, amount, orderCode, state);
-            removeQRMap(player, mapId);
-            activeTasks.remove(player.getUniqueId());
-            pendingStates.remove(orderCode);
-            if (task != null) task.cancel();
+    private boolean claimPaymentMatch(PaymentMatch match, AtomicBoolean terminal) {
+        boolean claimedTransaction = false;
+        if (!match.transactionId().isBlank()) {
+            claimedTransaction = processedSePayTransactions.add(match.transactionId());
+            if (!claimedTransaction) {
+                return false;
+            }
+        }
+
+        if (terminal.compareAndSet(false, true)) {
+            return true;
+        }
+
+        if (claimedTransaction) {
+            processedSePayTransactions.remove(match.transactionId());
+        }
+        return false;
+    }
+
+    private void markPaymentSuccess(Player player, PollingSession session, PaymentMatch match) {
+        if (shuttingDown.get()) {
+            return;
+        }
+        if (!claimPaymentMatch(match, session.terminal)) {
+            return;
+        }
+        session.confirmedPayment.set(match);
+        scheduleConfirmedReward(player, session);
+    }
+
+    private void scheduleConfirmedReward(Player player, PollingSession session) {
+        if (shuttingDown.get() || session.confirmedPayment.get() == null
+                || !session.rewardStarted.compareAndSet(false, true)) {
+            return;
+        }
+
+        boolean scheduled = plugin.getPlatformScheduler().runGlobal(() -> {
+            if (shuttingDown.get()) return;
+            boolean rewardDelivered = false;
+            try {
+                rewardDelivered = executeSuccess(session.playerName, session.amount, session.orderCode, session.state);
+            } catch (Throwable throwable) {
+                plugin.logSevere("CRITICAL: Unexpected error while settling paid bank order "
+                        + session.orderCode + " for " + session.playerName + ".", throwable);
+                sendFailureWebhook(session.playerName, session.amount, "reward-settlement-error:" + session.orderCode);
+            } finally {
+                finishSession(session);
+                notifyPlayerSettlement(player, session, rewardDelivered);
+            }
+        });
+
+        if (!scheduled && !shuttingDown.get()) {
+            session.rewardStarted.set(false);
+            plugin.logWarning("Paid bank order " + session.orderCode + " for " + session.playerName
+                    + " is waiting for the global scheduler; KoraPayments will retry automatically.");
         }
     }
 
-    private void executeSuccess(Player player, long amount, long orderCode, TransactionState state) {
+    private boolean executeSuccess(String playerName, long amount, long orderCode, TransactionState state) {
         int finalPoints = plugin.calculateFinalPoints(amount, PaymentChannel.BANK);
-        int bonusPoints = plugin.calculateBonusPoints(amount, PaymentChannel.BANK);
-        plugin.getLogManager().log("BANK_SUCCESS: " + player.getName() + " topup " + amount + " " + plugin.trPlain("general.currency") + ".");
+        plugin.getLogManager().log("BANK_SUCCESS: " + playerName + " topup " + amount + " " + plugin.trPlain("general.currency") + ".");
 
-        String commandTemplate = plugin.getConfig().getString("reward-command", "p give {player} {points}");
-        String command = commandTemplate
-                .replace("{player}", player.getName())
-                .replace("{points}", String.valueOf(finalPoints));
+        EconomyManager.DeliveryResult delivery = plugin.getEconomyManager().deliverBankOrManual(
+                playerName, finalPoints, amount, PaymentChannel.BANK);
+        boolean rewardDelivered = delivery.success();
+        if (!rewardDelivered) {
+            plugin.logSevere("Reward delivery failed for paid bank order " + orderCode + " via "
+                    + delivery.provider() + ": " + delivery.failureReason());
+            sendFailureWebhook(playerName, amount, "reward-delivery-failed:" + orderCode);
+        } else {
+            plugin.broadcast(plugin.tr("bank.success-broadcast", "player", playerName, "amount", plugin.formatMoney(amount)));
+        }
+        plugin.processSuccessPayment(playerName, amount, PaymentChannel.BANK, state.provider(),
+                "Order: " + orderCode + " | Content: " + state.description()
+                        + " | Economy: " + delivery.provider()
+                        + " | Reward: " + (rewardDelivered ? "DELIVERED" : "FAILED"));
+        return rewardDelivered;
+    }
 
+    private void notifyPlayerSettlement(Player player, PollingSession session, boolean rewardDelivered) {
         plugin.getPlatformScheduler().runPlayer(player, () -> {
-            plugin.dispatchConsoleCommand(command);
+            if (shuttingDown.get() || !player.isOnline()) return;
+            removeQRMapNow(player, session.mapId);
+            if (!rewardDelivered) {
+                player.sendMessage(plugin.tr("bank.reward-failed", "order", session.orderCode));
+                return;
+            }
+            int finalPoints = plugin.calculateFinalPoints(session.amount, PaymentChannel.BANK);
+            int bonusPoints = plugin.calculateBonusPoints(session.amount, PaymentChannel.BANK);
             player.spigot().sendMessage(net.md_5.bungee.api.ChatMessageType.ACTION_BAR,
                     new net.md_5.bungee.api.chat.TextComponent(plugin.tr("bank.success-actionbar")));
-            plugin.broadcast(plugin.tr("bank.success-broadcast", "player", player.getName(), "amount", plugin.formatMoney(amount)));
             player.sendMessage(plugin.tr("bank.success-points", "points", plugin.formatMoney(finalPoints)));
             if (bonusPoints > 0) {
-                player.sendMessage(plugin.tr("promotion.bonus-channel", "bonus", plugin.getPromotionPercent(PaymentChannel.BANK), "type", plugin.trPlain(PaymentChannel.BANK.languageKey())));
+                player.sendMessage(plugin.tr("promotion.bonus-channel",
+                        "bonus", plugin.getPromotionPercent(PaymentChannel.BANK),
+                        "type", plugin.trPlain(PaymentChannel.BANK.languageKey())));
             }
             plugin.spawnSuccessFirework(player.getLocation());
             player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
-            plugin.processSuccessPayment(player.getName(), amount, PaymentChannel.BANK, state.provider(),
-                    "Order: " + orderCode + " | Content: " + state.description());
         });
     }
 
+    private void expirePlayerPayment(Player player, PollingSession session) {
+        if (shuttingDown.get()) return;
+        if (!session.terminal.compareAndSet(false, true)) {
+            return;
+        }
+        finishSession(session);
+        plugin.getPlatformScheduler().runPlayer(player, () -> {
+            if (!shuttingDown.get() && player.isOnline()) {
+                player.sendMessage(plugin.tr("bank.expired"));
+                removeQRMapNow(player, session.mapId);
+            }
+        });
+        sendFailureWebhook(session.playerName, session.amount, "timeout");
+    }
+
+    private void finishSession(PollingSession session) {
+        removePendingState(session.orderCode, session.state);
+        activeTasks.remove(session.playerId, session);
+        cancelTask(session);
+    }
+
+    private void cancelTask(PollingSession session) {
+        ScheduledTask task = session.task.get();
+        if (task != null) {
+            task.cancel();
+        }
+    }
+
+    private void removePendingState(long orderCode, TransactionState expectedState) {
+        pendingStates.computeIfPresent(orderCode,
+                (ignored, currentState) -> currentState == expectedState ? null : currentState);
+    }
+
     private void sendFailureWebhook(String playerName, long amount, String reason) {
-        if (plugin.getTransactionWebhookManager() != null) {
+        if (!shuttingDown.get() && plugin.getTransactionWebhookManager() != null) {
             plugin.getTransactionWebhookManager().sendFailure(PaymentChannel.BANK, playerName, amount, reason);
         }
     }
 
     public void cancelPolling(Player player) {
-        ScheduledTask task = activeTasks.remove(player.getUniqueId());
-        if (task != null) {
-            task.cancel();
+        PollingSession session = activeTasks.get(player.getUniqueId());
+        if (session != null && session.terminal.compareAndSet(false, true)) {
+            finishSession(session);
             removeAnyQRMap(player);
         }
     }
 
+    /** Stops polling and rejects new network work while the plugin is unloading. */
+    public void shutdown() {
+        if (!shuttingDown.compareAndSet(false, true)) return;
+
+        for (HttpUriRequestBase request : activeHttpRequests) {
+            request.cancel();
+        }
+        httpClient.close(CloseMode.IMMEDIATE);
+        activeHttpRequests.clear();
+
+        // Let callbacks that started before the shutdown signal finish. New callbacks observe
+        // shuttingDown while holding the same monitor and are therefore suppressed.
+        synchronized (callbackLock) {
+            // Lifecycle barrier only.
+        }
+
+        for (PollingSession session : activeTasks.values()) {
+            session.terminal.set(true);
+            cancelTask(session);
+        }
+        activeTasks.clear();
+        pendingStates.clear();
+        processedSePayTransactions.clear();
+    }
+
     private void removeQRMap(Player player, int mapId) {
-        plugin.getPlatformScheduler().runPlayer(player, () -> {
-            for (ItemStack item : player.getInventory().getContents()) {
-                if (item != null && item.getType() == Material.FILLED_MAP) {
-                    MapMeta meta = (MapMeta) item.getItemMeta();
-                    if (meta != null && meta.hasMapView() && meta.getMapView().getId() == mapId) {
-                        player.getInventory().remove(item);
-                        break;
-                    }
+        plugin.getPlatformScheduler().runPlayer(player, () -> removeQRMapNow(player, mapId));
+    }
+
+    private void removeQRMapNow(Player player, int mapId) {
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (item != null && item.getType() == Material.FILLED_MAP) {
+                MapMeta meta = (MapMeta) item.getItemMeta();
+                if (meta != null && meta.hasMapView() && meta.getMapView().getId() == mapId) {
+                    player.getInventory().remove(item);
+                    break;
                 }
             }
-        });
+        }
     }
 
     private void removeAnyQRMap(Player player) {
@@ -483,23 +721,14 @@ public class BankPaymentManager {
     }
 
     private void sendPlayerMessage(Player player, String message) {
-        plugin.getPlatformScheduler().runPlayer(player, () -> player.sendMessage(message));
+        if (shuttingDown.get()) return;
+        plugin.getPlatformScheduler().runPlayer(player, () -> {
+            if (!shuttingDown.get()) player.sendMessage(message);
+        });
     }
 
     private void sendCreateTransactionError(Player player, String message) {
         sendPlayerMessage(player, message);
-    }
-
-    private void stopAndClean(Player player, int mapId, String message, long orderCode, ScheduledTask task) {
-        if (message != null) sendPlayerMessage(player, message);
-        removeQRMap(player, mapId);
-        cleanupTask(player, orderCode, task);
-    }
-
-    private void cleanupTask(Player player, long orderCode, ScheduledTask task) {
-        activeTasks.remove(player.getUniqueId());
-        pendingStates.remove(orderCode);
-        if (task != null) task.cancel();
     }
 
     private long buildOrderCode() {
@@ -508,7 +737,7 @@ public class BankPaymentManager {
     }
 
     private String buildPaymentDescription(String configPath, String payerName, long orderCode, String defaultFormat, int maxLength) {
-        String format = plugin.getConfig().getString(configPath, defaultFormat);
+        String format = plugin.config().getString(configPath, defaultFormat);
         String raw = format
                 .replace("{playername}", payerName)
                 .replace("{player}", payerName)
@@ -606,26 +835,72 @@ public class BankPaymentManager {
                 .build();
     }
 
+    private <T> T executeRequest(HttpUriRequestBase request,
+                                 HttpClientResponseHandler<? extends T> responseHandler) throws IOException {
+        if (shuttingDown.get()) {
+            throw shutdownException();
+        }
+
+        activeHttpRequests.add(request);
+        if (shuttingDown.get()) {
+            activeHttpRequests.remove(request);
+            request.cancel();
+            throw shutdownException();
+        }
+
+        try {
+            return httpClient.execute(request, responseHandler);
+        } finally {
+            activeHttpRequests.remove(request);
+        }
+    }
+
+    private InterruptedIOException shutdownException() {
+        return new InterruptedIOException("Bank payment HTTP client is shutting down");
+    }
+
+    private void notifySuccess(PaymentOrderCallback callback, PaymentOrder order) {
+        synchronized (callbackLock) {
+            if (!shuttingDown.get()) callback.onSuccess(order);
+        }
+    }
+
+    private void notifyFailure(PaymentOrderCallback callback, String message) {
+        synchronized (callbackLock) {
+            if (!shuttingDown.get()) callback.onFailure(message);
+        }
+    }
+
+    private boolean notifyPaid(ExternalPaymentCallback callback) {
+        synchronized (callbackLock) {
+            return !shuttingDown.get() && callback.onPaid();
+        }
+    }
+
+    private void notifyExpired(ExternalPaymentCallback callback) {
+        synchronized (callbackLock) {
+            if (!shuttingDown.get()) callback.onExpired();
+        }
+    }
+
     private String getProvider() {
-        String provider = plugin.getConfig().getString("napbank.provider", PROVIDER_PAYOS);
-        if (provider == null || provider.isBlank()) return PROVIDER_PAYOS;
-        provider = provider.trim().toLowerCase(Locale.ROOT);
+        String provider = plugin.getBankProviderName();
         return PROVIDER_SEPAY.equals(provider) ? PROVIDER_SEPAY : PROVIDER_PAYOS;
     }
 
-    private String getPayOSClientId() { return plugin.getConfig().getString("payos.client-id", ""); }
-    private String getPayOSApiKey() { return plugin.getConfig().getString("payos.api-key", ""); }
-    private String getPayOSChecksumKey() { return plugin.getConfig().getString("payos.checksum-key", ""); }
+    private String getPayOSClientId() { return plugin.config().getString("payos.client-id", ""); }
+    private String getPayOSApiKey() { return plugin.config().getString("payos.api-key", ""); }
+    private String getPayOSChecksumKey() { return plugin.config().getString("payos.checksum-key", ""); }
 
     private boolean hasPayOSCredentials() {
         return !getPayOSClientId().isBlank() && !getPayOSApiKey().isBlank() && !getPayOSChecksumKey().isBlank();
     }
 
-    private String getSePayApiToken() { return plugin.getConfig().getString("sepay.api-token", ""); }
-    private String getSePayBankCode() { return plugin.getConfig().getString("sepay.bank-code", ""); }
-    private String getSePayBankName() { return plugin.getConfig().getString("sepay.bank-name", getSePayBankCode()); }
-    private String getSePayAccountNumber() { return plugin.getConfig().getString("sepay.account-number", ""); }
-    private String getSePayAccountName() { return plugin.getConfig().getString("sepay.account-name", ""); }
+    private String getSePayApiToken() { return plugin.config().getString("sepay.api-token", ""); }
+    private String getSePayBankCode() { return plugin.config().getString("sepay.bank-code", ""); }
+    private String getSePayBankName() { return plugin.config().getString("sepay.bank-name", getSePayBankCode()); }
+    private String getSePayAccountNumber() { return plugin.config().getString("sepay.account-number", ""); }
+    private String getSePayAccountName() { return plugin.config().getString("sepay.account-name", ""); }
 
     private boolean hasSePayCredentials() {
         return !getSePayApiToken().isBlank()
@@ -646,7 +921,7 @@ public class BankPaymentManager {
     private long getMoneyLong(JsonObject object, String key, long fallback) {
         if (object == null || !object.has(key) || object.get(key).isJsonNull()) return fallback;
         try {
-            return new BigDecimal(object.get(key).getAsString()).longValue();
+            return new BigDecimal(object.get(key).getAsString()).longValueExact();
         } catch (Exception e) {
             return fallback;
         }
@@ -682,7 +957,10 @@ public class BankPaymentManager {
     }
 
     public interface ExternalPaymentCallback {
-        void onPaid();
+        /**
+         * @return true only when the owner atomically accepted the paid state.
+         */
+        boolean onPaid();
         void onExpired();
     }
 }

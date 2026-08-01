@@ -24,17 +24,19 @@ public final class TransactionWebhookManager {
         if (!isEnabledFor(safeChannel)) return;
 
         plugin.getPlatformScheduler().runAsync(() -> {
+            java.net.HttpURLConnection connection = null;
             try {
                 String webhookUrl = getWebhookUrl();
                 if (webhookUrl.isBlank()) return;
 
-                java.net.HttpURLConnection connection = plugin.openJsonPostConnection(webhookUrl);
+                connection = plugin.openJsonPostConnection(webhookUrl);
                 String json = buildSuccessPayload(safeChannel, playerName, amount, provider, detail);
                 connection.getOutputStream().write(json.getBytes(StandardCharsets.UTF_8));
                 connection.getResponseCode();
-                connection.disconnect();
             } catch (Exception e) {
                 plugin.logDebug("Discord transaction webhook failed: " + e.getMessage(), e);
+            } finally {
+                if (connection != null) connection.disconnect();
             }
         });
     }
@@ -44,30 +46,32 @@ public final class TransactionWebhookManager {
         if (!isEnabledFor(safeChannel)) return;
 
         plugin.getPlatformScheduler().runAsync(() -> {
+            java.net.HttpURLConnection connection = null;
             try {
                 String webhookUrl = getWebhookUrl();
                 if (webhookUrl.isBlank()) return;
 
-                java.net.HttpURLConnection connection = plugin.openJsonPostConnection(webhookUrl);
+                connection = plugin.openJsonPostConnection(webhookUrl);
                 String json = buildFailurePayload(safeChannel, playerName, amount, reason);
                 connection.getOutputStream().write(json.getBytes(StandardCharsets.UTF_8));
                 connection.getResponseCode();
-                connection.disconnect();
             } catch (Exception e) {
                 plugin.logDebug("Discord transaction failure webhook failed: " + e.getMessage(), e);
+            } finally {
+                if (connection != null) connection.disconnect();
             }
         });
     }
 
     public boolean isEnabledFor(PaymentChannel channel) {
-        if (!plugin.getConfig().getBoolean("discord-webhook.enabled", false)) return false;
+        if (!plugin.config().getBoolean("discord-webhook.enabled", false)) return false;
         String webhookUrl = getWebhookUrl();
         if (webhookUrl.isBlank() || webhookUrl.contains("DAN_LINK_WEBHOOK")) return false;
 
         PaymentChannel safeChannel = channel == null ? PaymentChannel.LEGACY : channel;
         String key = safeChannel.storageKey().toLowerCase(Locale.ROOT);
         String path = "discord-webhook.transactions." + key + ".enabled";
-        return plugin.getConfig().getBoolean(path, true);
+        return plugin.config().getBoolean(path, true);
     }
 
     private String buildSuccessPayload(PaymentChannel channel, String playerName, long amount, String provider, String detail) {
@@ -145,22 +149,22 @@ public final class TransactionWebhookManager {
     private int getColor(PaymentChannel channel, int fallback) {
         String key = channel == null ? "legacy" : channel.storageKey().toLowerCase(Locale.ROOT);
         String path = "discord-webhook.transactions." + key + ".color";
-        if (plugin.getConfig().contains(path)) {
-            return plugin.getConfig().getInt(path, fallback);
+        if (plugin.config().contains(path)) {
+            return plugin.config().getInt(path, fallback);
         }
-        return plugin.getConfig().getInt("discord-webhook.color", fallback);
+        return plugin.config().getInt("discord-webhook.color", fallback);
     }
 
     private String getWebhookUrl() {
-        return plugin.getConfig().getString("discord-webhook.url", "").trim();
+        return plugin.config().getString("discord-webhook.url", "").trim();
     }
 
     private String getUsername() {
-        return plugin.getConfig().getString("discord-webhook.username", "KoraPayments");
+        return plugin.config().getString("discord-webhook.username", "KoraPayments");
     }
 
     private String getAvatarUrl(String playerName) {
-        String template = plugin.getConfig().getString("discord-webhook.avatar-url", "https://minotar.net/avatar/%player%/100.png");
+        String template = plugin.config().getString("discord-webhook.avatar-url", "https://minotar.net/avatar/%player%/100.png");
         return template.replace("%player%", playerName == null ? "Steve" : playerName)
                 .replace("{player}", playerName == null ? "Steve" : playerName)
                 .replace("{playername}", playerName == null ? "Steve" : playerName);

@@ -1,9 +1,18 @@
 # Configuration - KoraPayments
 
-KoraPayments dùng các file cấu hình chính trong thư mục `plugins/KoraPayments/`:
+KoraPayments 1.4.0 tách cấu hình theo chức năng trong `plugins/KoraPayments/`:
 
 ```text
 config.yml
+database.yml
+payments.yml
+discord.yml
+milestones.yml
+gui.yml
+providers/payos.yml
+providers/sepay.yml
+providers/card2k.yml
+providers/gachthefast.yml
 store.yml
 languages/*.yml
 ```
@@ -17,6 +26,18 @@ Không nên đổi cấu trúc key nếu bạn không chắc plugin có đọc k
 ---
 
 ## `config.yml`
+
+### Chọn provider
+
+```yaml
+providers:
+  bank: "sepay"          # sepay | payos
+  card: "gachthefast"    # gachthefast | card2k
+  economy: "command"     # command | auto | playerpoints | vault | fancyeco
+```
+
+Các key cũ `napbank.provider`, `napthe.provider` và `economy.provider` vẫn được
+đọc nếu section mới chưa tồn tại.
 
 ### Ngôn ngữ
 
@@ -57,21 +78,7 @@ Khuyến nghị:
 
 ---
 
-## Nạp ngân hàng
-
-### Provider
-
-```yaml
-napbank:
-  provider: "sepay"
-```
-
-Giá trị hỗ trợ:
-
-```text
-sepay
-payos
-```
+## Nạp ngân hàng (`payments.yml`)
 
 ### Giới hạn và thời gian
 
@@ -116,7 +123,7 @@ napbank:
 
 ---
 
-## PayOS
+## PayOS (`providers/payos.yml`)
 
 ```yaml
 payos:
@@ -136,7 +143,7 @@ Không bỏ `{ordercode}` để tránh lỗi đối soát.
 
 ---
 
-## SePay
+## SePay (`providers/sepay.yml`)
 
 ```yaml
 sepay:
@@ -161,21 +168,7 @@ sepay:
 
 ---
 
-## Nạp thẻ cào
-
-### Provider
-
-```yaml
-napthe:
-  provider: "gachthefast"
-```
-
-Giá trị hỗ trợ:
-
-```text
-card2k
-gachthefast
-```
+## Nạp thẻ cào (`payments.yml`)
 
 ### Chiết khấu
 
@@ -197,9 +190,6 @@ Có thể cấu hình theo mệnh giá chung hoặc theo nhà mạng nếu provi
 napthe:
   rewards:
     ratio: 1000
-    commands:
-      - "points give %player% %points%"
-      - "bc &bKoraPayments &8» &f%player% vừa nạp &a%amount% VNĐ &fqua thẻ cào."
 ```
 
 Công thức:
@@ -220,7 +210,7 @@ napthe:
 
 ---
 
-## Card2K
+## Card2K (`providers/card2k.yml`)
 
 ```yaml
 card2k:
@@ -234,7 +224,7 @@ card2k:
 
 ---
 
-## GachTheFast
+## GachTheFast (`providers/gachthefast.yml`)
 
 ```yaml
 gachthefast:
@@ -249,10 +239,19 @@ gachthefast:
 
 ---
 
-## Thưởng bank và nạp thủ công
+## Reward/economy (`payments.yml`)
 
 ```yaml
-reward-command: "p give {player} {points}"
+economy:
+  fallback-to-command: true
+  reward-commands:
+    - "p give {player} {points}"
+    - "crate key give {player} napthe 1"
+  post-commands:
+    bank: []
+    manual: []
+    card:
+      - "bc {player} vừa nạp {amount} VNĐ qua thẻ cào."
 conversion-rate: 1
 ```
 
@@ -265,12 +264,15 @@ points = số_tiền / 1000 * conversion-rate
 Biến hỗ trợ:
 
 ```text
-{player}, {points}
+{player}, {points}, {amount}, {net_amount}, {channel}
 ```
+
+Danh sách chạy bằng console theo thứ tự. Các dạng cũ `%player%`, `%points%`,
+`reward-command`, `economy.command` và `napthe.rewards.commands` vẫn tương thích.
 
 ---
 
-## Discord webhook
+## Discord webhook (`discord.yml`)
 
 ```yaml
 discord-webhook:
@@ -295,7 +297,7 @@ Bạn có thể bật/tắt thông báo theo từng loại giao dịch.
 
 ---
 
-## Mốc nạp cá nhân
+## Mốc nạp cá nhân (`milestones.yml`)
 
 ```yaml
 milestones:

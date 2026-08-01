@@ -49,15 +49,15 @@ public class LogManager {
     }
 
     public void reloadSettings() {
-        this.debugEnabled = plugin.getConfig().getBoolean("logging.debug", false);
-        this.consoleEnabled = plugin.getConfig().getBoolean("logging.console.enabled", true);
-        this.transactionConsoleEnabled = plugin.getConfig().getBoolean("logging.console.transaction-events", true);
-        this.antiSpamEnabled = plugin.getConfig().getBoolean("logging.console.anti-spam", true);
-        this.duplicateWindowMillis = Math.max(1L, plugin.getConfig().getLong("logging.console.duplicate-window-seconds", DEFAULT_SPAM_WINDOW_SECONDS)) * 1000L;
-        this.fileEnabled = plugin.getConfig().getBoolean("logging.file.enabled", true);
-        this.asyncFileEnabled = plugin.getConfig().getBoolean("logging.file.async", true);
-        this.transactionLogFile = resolveLogFile(plugin.getConfig().getString("logging.file.transaction-log", "transactions.log"));
-        this.cardLogFile = resolveLogFile(plugin.getConfig().getString("logging.file.card-log", "nap_the.txt"));
+        this.debugEnabled = plugin.config().getBoolean("logging.debug", false);
+        this.consoleEnabled = plugin.config().getBoolean("logging.console.enabled", true);
+        this.transactionConsoleEnabled = plugin.config().getBoolean("logging.console.transaction-events", true);
+        this.antiSpamEnabled = plugin.config().getBoolean("logging.console.anti-spam", true);
+        this.duplicateWindowMillis = Math.max(1L, plugin.config().getLong("logging.console.duplicate-window-seconds", DEFAULT_SPAM_WINDOW_SECONDS)) * 1000L;
+        this.fileEnabled = plugin.config().getBoolean("logging.file.enabled", true);
+        this.asyncFileEnabled = plugin.config().getBoolean("logging.file.async", true);
+        this.transactionLogFile = resolveLogFile(plugin.config().getString("logging.file.transaction-log", "transactions.log"));
+        this.cardLogFile = resolveLogFile(plugin.config().getString("logging.file.card-log", "nap_the.txt"));
         ensureLogFile(transactionLogFile);
         ensureLogFile(cardLogFile);
     }
@@ -163,6 +163,9 @@ public class LogManager {
         try {
             if (!fileExecutor.awaitTermination(3L, TimeUnit.SECONDS)) {
                 fileExecutor.shutdownNow();
+                if (!fileExecutor.awaitTermination(1L, TimeUnit.SECONDS)) {
+                    plugin.getLogger().warning("KoraPayments log writer did not stop within the safety timeout.");
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

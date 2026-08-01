@@ -1,0 +1,21 @@
+# =============================================================
+# KoraPayments - DISCORD WEBHOOK
+# Discord Auto Buy dùng file store.yml riêng.
+# =============================================================
+
+discord-webhook:
+  enabled: true
+  url: "DAN_LINK_WEBHOOK_DISCORD_CUA_BAN_VAO_DAY"
+  username: "KoraPayments"
+  avatar-url: "https://minotar.net/avatar/%player%/100.png"
+  color: 65280
+  transactions:
+    bank:
+      enabled: true
+      color: 65280
+    card:
+      enabled: true
+      color: 16776960
+    manual:
+      enabled: true
+      color: 10181046

@@ -39,7 +39,7 @@ public class ConfirmCardCommand implements CommandExecutor {
 
         String requestId = UUID.randomUUID().toString().replace("-", "");
         CardRequest card = new CardRequest(session.telco, session.pin, session.serial, session.amount, requestId);
-        CardChargingService service = new CardChargingService(plugin);
+        CardChargingService service = plugin.getCardChargingService();
         String providerName = service.getProviderDisplayName();
 
         if (!service.hasCredentials()) {

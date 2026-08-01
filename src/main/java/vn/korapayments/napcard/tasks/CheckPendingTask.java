@@ -21,7 +21,7 @@ public class CheckPendingTask implements Runnable {
 
     public CheckPendingTask(KoraPayments plugin) {
         this.plugin = plugin;
-        this.service = new CardChargingService(plugin);
+        this.service = plugin.getCardChargingService();
     }
 
     @Override

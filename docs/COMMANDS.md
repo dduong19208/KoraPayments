@@ -255,8 +255,12 @@ Nếu không nhập subcommand, plugin mặc định chạy `publish`.
 Khi bật Discord Auto Buy, plugin có slash command cho staff:
 
 ```text
+/taokenhbanhang
 /kora-admin kiemtramadon <ma-don>
 ```
+
+`/taokenhbanhang` đăng bảng sản phẩm trực tiếp từ Discord, không cần nhập lệnh
+trong Minecraft.
 
 Quyền dùng lệnh phụ thuộc vào:
 

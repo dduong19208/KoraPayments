@@ -10,7 +10,8 @@ import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.entities.User;
-import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
+import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
+import net.dv8tion.jda.api.entities.channel.middleman.GuildMessageChannel;
 import net.dv8tion.jda.api.events.interaction.ModalInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
@@ -44,6 +45,9 @@ import vn.korapayments.napbank.manager.BankPaymentManager;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -53,8 +57,20 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -67,6 +83,9 @@ public final class StoreManager {
     private static final String RATING_BUTTON_PREFIX = "kp_store_rate:";
     private static final int DISCORD_SELECT_LIMIT = 25;
     private static final int STOREFRONT_PREVIEW_LIMIT = 18;
+    private static final long JDA_SHUTDOWN_TIMEOUT_SECONDS = 8L;
+    private static final long JDA_EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS = 2L;
+    private static final long LIFECYCLE_SHUTDOWN_TIMEOUT_SECONDS = 15L;
 
     private final KoraPayments plugin;
     private final File storeFile;
@@ -74,12 +93,16 @@ public final class StoreManager {
     private final Object ordersFileLock = new Object();
     private final ConcurrentHashMap<String, StoreOrder> orders = new ConcurrentHashMap<>();
     private final StoreServerListener serverListener;
+    private final AtomicLong botGeneration = new AtomicLong();
+    private final ExecutorService botLifecycleExecutor;
 
     private volatile YamlConfiguration storeConfig;
     private volatile List<StoreItem> products = List.of();
-    private volatile JDA jda;
+    private volatile DiscordBotSession botSession;
+    private volatile DiscordBotSession startingBotSession;
     private volatile boolean enabled;
     private volatile boolean botReady;
+    private volatile boolean lifecycleClosed;
     private volatile ScheduledTask waitingOrderRetryTask;
 
     public StoreManager(KoraPayments plugin) {
@@ -87,111 +110,393 @@ public final class StoreManager {
         this.storeFile = new File(plugin.getDataFolder(), "store.yml");
         this.ordersFile = new File(plugin.getDataFolder(), "store-orders.yml");
         this.serverListener = new StoreServerListener();
+        this.botLifecycleExecutor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "KoraPayments-Discord-Lifecycle");
+            thread.setDaemon(true);
+            return thread;
+        });
         ensureStoreFile();
         reloadConfigOnly();
         loadStoredOrders();
+        reconcileStoredOrdersOnStartup();
         plugin.getServer().getPluginManager().registerEvents(this.serverListener, plugin);
     }
 
-    public void reload() {
+    public synchronized void reload() {
+        if (lifecycleClosed) {
+            plugin.logWarning("Discord Store cannot reload because its lifecycle has already been closed.");
+            return;
+        }
+        long generation = botGeneration.incrementAndGet();
+        this.enabled = false;
+        this.botReady = false;
+        pauseOpenPaymentOrders();
+        stopWaitingOrderRetryTask();
+
         ensureStoreFile();
         reloadConfigOnly();
-        cancelOpenPaymentOrders("Store reload: đơn chờ thanh toán đã bị hủy để tránh đối soát sai.");
-        stopWaitingOrderRetryTask();
-        shutdownBotOnly();
 
         this.enabled = storeConfig.getBoolean("settings.enabled", false);
         if (!enabled) {
+            queueBotReplacement(generation, null, null, false);
             plugin.logDebug("Discord Store is disabled in store.yml.");
             return;
         }
 
         String token = getToken();
+        String activity = storeConfig.getString("settings.activity", "AUTO BUY | KoraPayments");
         if (token.isBlank() || token.contains("DAN_TOKEN_BOT")) {
+            queueBotReplacement(generation, null, null, false);
             plugin.logWarning("Discord Store is enabled but settings.bot-token is empty or still a placeholder.");
             return;
         }
 
-        plugin.getPlatformScheduler().runAsync(() -> {
-            try {
-                JDA newJda = JDABuilder.createDefault(token)
-                        .setActivity(Activity.watching(storeConfig.getString("settings.activity", "AUTO BUY | KoraPayments")))
-                        .addEventListeners(new StoreDiscordListener())
-                        .build();
-                if (!enabled) {
-                    newJda.shutdownNow();
-                    return;
-                }
-                this.jda = newJda;
-                plugin.logInfo("Discord Store bot is starting. Use /taokenhbanhang after the bot becomes ready.");
-            } catch (Exception e) {
-                this.jda = null;
-                plugin.logWarning("Cannot start Discord Store bot: " + e.getMessage(), e);
-            }
-        });
+        queueBotReplacement(generation, token, activity, true);
     }
 
     public void shutdown() {
-        this.enabled = false;
-        cancelOpenPaymentOrders("Plugin shutdown: đơn chờ thanh toán đã bị hủy.");
+        synchronized (this) {
+            if (lifecycleClosed) return;
+            lifecycleClosed = true;
+            botGeneration.incrementAndGet();
+            this.enabled = false;
+            this.botReady = false;
+        }
+        pauseOpenPaymentOrders();
         stopWaitingOrderRetryTask();
         HandlerList.unregisterAll(serverListener);
-        shutdownBotOnly();
+
+        Future<?> stopFuture = null;
+        try {
+            stopFuture = botLifecycleExecutor.submit(this::closeCurrentBotSession);
+            stopFuture.get(LIFECYCLE_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (RejectedExecutionException ignored) {
+            closeCurrentBotSession();
+        } catch (TimeoutException e) {
+            plugin.logWarning("Timed out while waiting for the Discord Store bot to stop; forcing lifecycle executor shutdown.");
+            if (stopFuture != null) stopFuture.cancel(true);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            if (stopFuture != null) stopFuture.cancel(true);
+        } catch (ExecutionException e) {
+            plugin.logWarning("Discord Store shutdown failed: " + rootCauseMessage(e), e.getCause());
+        } finally {
+            botLifecycleExecutor.shutdownNow();
+            try {
+                if (!botLifecycleExecutor.awaitTermination(2L, TimeUnit.SECONDS)) {
+                    plugin.logWarning("Discord Store lifecycle thread did not terminate within the safety timeout.");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
+            // Covers a rare timeout where the queued stop task never began. The generation
+            // guard prevents an in-flight startup task from publishing another live session.
+            closeCurrentBotSession();
+        }
     }
 
-    private void cancelOpenPaymentOrders(String reason) {
-        long now = System.currentTimeMillis();
-        boolean changed = false;
+    private void pauseOpenPaymentOrders() {
         for (StoreOrder order : orders.values()) {
-            if (order.status != OrderStatus.PENDING) continue;
-            order.status = OrderStatus.CANCELED;
-            order.completedAtMillis = now;
-            order.lastMessage = reason;
+            synchronized (order) {
+                if (order.status != OrderStatus.PENDING) continue;
+            }
             order.cancelTask();
             plugin.getBankPaymentManager().cancelExternalTransaction(order.payment.orderCode());
-            editOrderMessage(order, buildCanceledEmbed(order), List.of());
-            changed = true;
         }
-        if (changed) saveOrders();
     }
 
-    private void shutdownBotOnly() {
-        JDA current = this.jda;
-        this.botReady = false;
-        this.jda = null;
-        if (current != null) {
+    private void queueBotReplacement(long generation, String token, String activity, boolean startRequested) {
+        try {
+            botLifecycleExecutor.execute(() -> replaceBotSession(generation, token, activity, startRequested));
+        } catch (RejectedExecutionException e) {
+            if (!lifecycleClosed) {
+                plugin.logWarning("Cannot queue Discord Store lifecycle update: executor is unavailable.", e);
+            }
+        }
+    }
+
+    private void replaceBotSession(long generation, String token, String activity, boolean startRequested) {
+        closeCurrentBotSession();
+        if (!startRequested || !isRequestedBotGeneration(generation)) return;
+
+        DiscordBotSession session = new DiscordBotSession(generation);
+        JDA newJda = null;
+        boolean attached = false;
+        boolean accepted = false;
+        try {
+            synchronized (this) {
+                if (!isRequestedBotGeneration(generation)) return;
+                startingBotSession = session;
+            }
+
+            newJda = JDABuilder.createDefault(token)
+                    .setActivity(Activity.watching(activity))
+                    .setEnableShutdownHook(false)
+                    .setCallbackPool(session.callbackPool, true)
+                    .setEventPool(session.eventPool, true)
+                    .setGatewayPool(session.gatewayPool, true)
+                    .setRateLimitScheduler(session.rateLimitScheduler, true)
+                    .setRateLimitElastic(session.rateLimitElastic, true)
+                    .addEventListeners(session.listener)
+                    .build();
+
+            synchronized (this) {
+                if (startingBotSession == session) {
+                    startingBotSession = null;
+                    session.jda.set(newJda);
+                    attached = true;
+                }
+                if (attached && isRequestedBotGeneration(generation)) {
+                    this.botSession = session;
+                    accepted = true;
+                }
+            }
+
+            if (accepted) {
+                plugin.logInfo("Discord Store bot is starting. Use /taokenhbanhang after the bot becomes ready.");
+            }
+        } catch (Exception e) {
+            synchronized (this) {
+                if (startingBotSession == session) {
+                    startingBotSession = null;
+                }
+                if (botGeneration.get() == generation) {
+                    if (botSession == session) botSession = null;
+                    this.botReady = false;
+                }
+            }
+            if (isRequestedBotGeneration(generation)) {
+                plugin.logWarning("Cannot start Discord Store bot: " + e.getMessage(), e);
+            }
+        } finally {
+            if (!accepted || botSession != session) {
+                if (newJda != null && !attached) {
+                    closeJdaInstance(newJda, session.listener);
+                }
+                closeBotSession(session);
+            }
+        }
+    }
+
+    private boolean isRequestedBotGeneration(long generation) {
+        return !lifecycleClosed && enabled && botGeneration.get() == generation;
+    }
+
+    private JDA currentJda() {
+        DiscordBotSession current = botSession;
+        return current == null ? null : current.jda.get();
+    }
+
+    private void closeCurrentBotSession() {
+        DiscordBotSession current;
+        DiscordBotSession starting;
+        synchronized (this) {
+            current = this.botSession;
+            starting = this.startingBotSession;
+            this.botReady = false;
+            this.botSession = null;
+            this.startingBotSession = null;
+        }
+        closeBotSession(current);
+        if (starting != current) {
+            closeBotSession(starting);
+        }
+    }
+
+    private void closeBotSession(DiscordBotSession session) {
+        if (session == null) return;
+        JDA current = session.jda.getAndSet(null);
+        closeJdaInstance(current, session.listener);
+        shutdownJdaExecutors(session);
+    }
+
+    private void closeJdaInstance(JDA current, StoreDiscordListener listener) {
+        if (current == null) return;
+
+        try {
+            if (listener != null) current.removeEventListener(listener);
+        } catch (Exception e) {
+            plugin.logDebug("Cannot detach Discord Store listener during shutdown: " + e.getMessage(), e);
+        }
+        try {
+            current.setAutoReconnect(false);
+        } catch (Exception ignored) {
+        }
+        try {
+            current.cancelRequests();
+        } catch (Exception ignored) {
+        }
+        try {
+            current.shutdown();
+            if (!current.awaitShutdown(JDA_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                plugin.logWarning("Discord Store JDA graceful shutdown timed out after "
+                        + JDA_SHUTDOWN_TIMEOUT_SECONDS + " seconds; forcing the remaining connection closed.");
+                current.shutdownNow();
+                if (!current.awaitShutdown(Math.max(2L, JDA_SHUTDOWN_TIMEOUT_SECONDS / 2L), TimeUnit.SECONDS)) {
+                    plugin.logWarning("Discord Store JDA did not fully stop after the forced shutdown timeout.");
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             try {
                 current.shutdownNow();
             } catch (Exception ignored) {
             }
+        } catch (Exception e) {
+            plugin.logDebug("Discord Store JDA shutdown reported an error: " + e.getMessage(), e);
+        } finally {
+            closeJdaHttpClient(current);
         }
     }
 
+    private void shutdownJdaExecutors(DiscordBotSession session) {
+        if (!session.executorsClosed.compareAndSet(false, true)) return;
+
+        List<ExecutorService> executors = session.executors();
+        for (ExecutorService executor : executors) {
+            try {
+                executor.shutdownNow();
+            } catch (Exception e) {
+                plugin.logDebug("Cannot stop a Discord Store executor: " + e.getMessage(), e);
+            }
+        }
+
+        long deadline = System.nanoTime()
+                + TimeUnit.SECONDS.toNanos(JDA_EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS);
+        boolean interrupted = false;
+        List<String> stillRunning = new ArrayList<>();
+        for (int index = 0; index < executors.size(); index++) {
+            ExecutorService executor = executors.get(index);
+            if (executor.isTerminated()) continue;
+
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0L) {
+                stillRunning.add(session.executorNames.get(index));
+                continue;
+            }
+            try {
+                if (!executor.awaitTermination(remaining, TimeUnit.NANOSECONDS)) {
+                    stillRunning.add(session.executorNames.get(index));
+                }
+            } catch (InterruptedException e) {
+                interrupted = true;
+                break;
+            }
+        }
+
+        stillRunning.clear();
+        for (int index = 0; index < executors.size(); index++) {
+            if (!executors.get(index).isTerminated()) {
+                stillRunning.add(session.executorNames.get(index));
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
+        if (!stillRunning.isEmpty()) {
+            plugin.logWarning("Discord Store executors did not fully stop within "
+                    + JDA_EXECUTOR_SHUTDOWN_TIMEOUT_SECONDS + " seconds: "
+                    + String.join(", ", stillRunning) + ".");
+        }
+    }
+
+    private void closeJdaHttpClient(JDA current) {
+        okhttp3.OkHttpClient httpClient = null;
+        try {
+            httpClient = current.getHttpClient();
+            httpClient.dispatcher().cancelAll();
+            httpClient.dispatcher().executorService().shutdownNow();
+            if (!httpClient.dispatcher().executorService().awaitTermination(2L, TimeUnit.SECONDS)) {
+                plugin.logWarning("Discord Store HTTP dispatcher did not stop within the safety timeout.");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            plugin.logDebug("Discord Store HTTP cleanup reported an error: " + e.getMessage(), e);
+        } finally {
+            if (httpClient != null) httpClient.connectionPool().evictAll();
+        }
+    }
+
+    private void queueReadyEvent(JDA candidate, long generation) {
+        try {
+            botLifecycleExecutor.execute(() -> handleReady(candidate, generation));
+        } catch (RejectedExecutionException ignored) {
+            // Plugin shutdown owns and closes the session; never block a JDA callback thread.
+        }
+    }
+
+    private void handleReady(JDA candidate, long generation) {
+        synchronized (this) {
+            if (!isCurrentBotSession(candidate, generation)) return;
+            botReady = true;
+        }
+        registerStoreSlashCommands(candidate, generation);
+        startWaitingOrderRetryTask();
+        resumeRecoveredOrders(candidate, generation);
+    }
+
+    private String rootCauseMessage(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        String message = current.getMessage();
+        return message == null || message.isBlank() ? current.getClass().getSimpleName() : message;
+    }
+
     public boolean publishStorefront(CommandSender sender) {
+        Objects.requireNonNull(sender, "sender");
+        return publishStorefront(null, message -> runSenderMessage(sender, message));
+    }
+
+    private boolean publishStorefront(String expectedGuildId, Consumer<String> resultHandler) {
+        Objects.requireNonNull(resultHandler, "resultHandler");
         if (!enabled) {
-            sender.sendMessage(plugin.tr("store.disabled"));
+            resultHandler.accept(plugin.tr("store.disabled"));
             return false;
         }
         if (products.isEmpty()) {
-            sender.sendMessage(plugin.tr("store.no-products"));
+            resultHandler.accept(plugin.tr("store.no-products"));
             return false;
         }
 
-        JDA current = jda;
-        if (current == null) {
-            sender.sendMessage(plugin.tr("store.bot-not-ready"));
+        JDA current = currentJda();
+        if (current == null || !botReady) {
+            resultHandler.accept(plugin.tr("store.bot-not-ready"));
             return false;
         }
 
-        String channelId = storeConfig.getString("settings.storefront-channel-id", "");
+        String channelId = storeConfig.getString("settings.storefront-channel-id", "").trim();
         if (channelId.isBlank() || channelId.contains("DAN_ID")) {
-            sender.sendMessage(plugin.tr("store.channel-missing"));
+            resultHandler.accept(plugin.tr("store.channel-missing"));
+            return false;
+        }
+        if (!isValidDiscordId(channelId)) {
+            resultHandler.accept(plugin.tr("store.channel-not-found", "channel", channelId));
             return false;
         }
 
-        TextChannel channel = current.getTextChannelById(channelId);
+        GuildMessageChannel channel = current.getChannelById(GuildMessageChannel.class, channelId);
         if (channel == null) {
-            sender.sendMessage(plugin.tr("store.channel-not-found", "channel", channelId));
+            resultHandler.accept(plugin.tr("store.channel-not-found", "channel", channelId));
+            return false;
+        }
+        if (expectedGuildId != null && !expectedGuildId.equals(channel.getGuild().getId())) {
+            resultHandler.accept(plugin.tr("store.publish-failed", "reason",
+                    "Kênh bán hàng không thuộc máy chủ Discord đang gọi lệnh"));
+            return false;
+        }
+        Member selfMember = channel.getGuild().getSelfMember();
+        Permission sendPermission = channel instanceof ThreadChannel
+                ? Permission.MESSAGE_SEND_IN_THREADS
+                : Permission.MESSAGE_SEND;
+        if (!selfMember.hasPermission(channel,
+                Permission.VIEW_CHANNEL,
+                sendPermission,
+                Permission.MESSAGE_EMBED_LINKS)) {
+            resultHandler.accept(plugin.tr("store.publish-failed", "reason",
+                    "Bot thiếu quyền View Channel, " + sendPermission.getName()
+                            + " hoặc Embed Links trong #" + channel.getName()));
             return false;
         }
 
@@ -199,8 +504,8 @@ public final class StoreManager {
         StringSelectMenu menu = buildProductMenu();
         channel.sendMessageEmbeds(embed)
                 .setComponents(ActionRow.of(menu))
-                .queue(message -> runSenderMessage(sender, plugin.tr("store.publish-success", "channel", channel.getName())),
-                        failure -> runSenderMessage(sender, plugin.tr("store.publish-failed", "reason", failure.getMessage())));
+                .queue(message -> resultHandler.accept(plugin.tr("store.publish-success", "channel", channel.getName())),
+                        failure -> resultHandler.accept(plugin.tr("store.publish-failed", "reason", failure.getMessage())));
         return true;
     }
 
@@ -211,7 +516,7 @@ public final class StoreManager {
     }
 
     public void sendStatus(CommandSender sender) {
-        JDA current = jda;
+        JDA current = currentJda();
         String bot = current == null ? plugin.tr("general.disabled") : current.getStatus().name();
         sender.sendMessage(plugin.tr("store.status",
                 "enabled", enabled ? plugin.tr("general.enabled") : plugin.tr("general.disabled"),
@@ -569,22 +874,7 @@ public final class StoreManager {
                 orders.put(order.orderId.toUpperCase(Locale.ROOT), order);
                 saveOrders();
 
-                ScheduledTask task = plugin.getBankPaymentManager().startExternalPolling(
-                        discordUserId + ":" + orderId,
-                        paymentOrder.orderCode(),
-                        paymentOrder.amount(),
-                        new BankPaymentManager.ExternalPaymentCallback() {
-                            @Override
-                            public void onPaid() {
-                                handlePaidOrder(order);
-                            }
-
-                            @Override
-                            public void onExpired() {
-                                handleExpiredOrder(order);
-                            }
-                        });
-                order.task.set(task);
+                startOrderPaymentPolling(order);
 
                 hook.editOriginalEmbeds(buildOrderEmbed(order))
                         .setComponents(buildOrderComponents(order))
@@ -623,102 +913,218 @@ public final class StoreManager {
                 });
     }
 
-    private void handlePaidOrder(StoreOrder order) {
-        if (order.status != OrderStatus.PENDING) return;
-        order.status = OrderStatus.PAID;
-        order.paidAtMillis = System.currentTimeMillis();
-        order.cancelTask();
-        saveOrders();
-        executeDelivery(order);
+    private void startOrderPaymentPolling(StoreOrder order) {
+        if (order == null) return;
+        synchronized (order) {
+            if (order.status != OrderStatus.PENDING) return;
+        }
+
+        plugin.getBankPaymentManager().restoreExternalTransaction(
+                order.payment.orderCode(),
+                order.payment.provider(),
+                order.payment.description(),
+                order.createdAtMillis
+        );
+        ScheduledTask task = plugin.getBankPaymentManager().startExternalPolling(
+                order.discordUserId + ":" + order.orderId,
+                order.payment.orderCode(),
+                order.payment.amount(),
+                new BankPaymentManager.ExternalPaymentCallback() {
+                    @Override
+                    public boolean onPaid() {
+                        return handlePaidOrder(order);
+                    }
+
+                    @Override
+                    public void onExpired() {
+                        handleExpiredOrder(order);
+                    }
+                }
+        );
+        order.attachPaymentTask(task);
+    }
+
+    private boolean claimPendingTransition(StoreOrder order,
+                                           OrderStatus targetStatus,
+                                           String message,
+                                           long transitionTimeMillis) {
+        if (order == null) return false;
+        if (targetStatus != OrderStatus.PAID
+                && targetStatus != OrderStatus.CANCELED
+                && targetStatus != OrderStatus.EXPIRED) {
+            throw new IllegalArgumentException("Unsupported pending-order transition: " + targetStatus);
+        }
+        synchronized (order) {
+            boolean paidWonCancellationRace = targetStatus == OrderStatus.PAID
+                    && order.status == OrderStatus.CANCELED;
+            if (order.status != OrderStatus.PENDING && !paidWonCancellationRace) return false;
+            order.lastMessage = Objects.toString(message, "");
+            if (targetStatus == OrderStatus.PAID) {
+                order.paidAtMillis = transitionTimeMillis;
+                order.completedAtMillis = 0L;
+            } else {
+                order.completedAtMillis = transitionTimeMillis;
+            }
+            order.status = targetStatus;
+            return true;
+        }
+    }
+
+    private long claimDeliveryAttempt(StoreOrder order) {
+        synchronized (order) {
+            if (order.status != OrderStatus.PAID && order.status != OrderStatus.WAITING_PLAYER) {
+                return 0L;
+            }
+            order.lastMessage = "Đang kiểm tra người chơi và chạy lệnh giao hàng.";
+            order.deliveryAttempt++;
+            if (order.deliveryAttempt <= 0L) order.deliveryAttempt = 1L;
+            order.status = OrderStatus.DELIVERING;
+            return order.deliveryAttempt;
+        }
+    }
+
+    private boolean isCurrentDeliveryAttempt(StoreOrder order, long deliveryAttempt) {
+        synchronized (order) {
+            return order.status == OrderStatus.DELIVERING && order.deliveryAttempt == deliveryAttempt;
+        }
+    }
+
+    private boolean completeDeliveryAttempt(StoreOrder order, long deliveryAttempt) {
+        synchronized (order) {
+            if (order.status != OrderStatus.DELIVERING || order.deliveryAttempt != deliveryAttempt) return false;
+            order.completedAtMillis = System.currentTimeMillis();
+            order.lastMessage = "Đơn hàng đã giao tự động thành công.";
+            order.status = OrderStatus.DELIVERED;
+            return true;
+        }
+    }
+
+    private boolean handlePaidOrder(StoreOrder order) {
+        if (!claimPendingTransition(order, OrderStatus.PAID,
+                "Thanh toán đã được xác nhận. Hệ thống đang chuẩn bị giao hàng.",
+                System.currentTimeMillis())) {
+            return false;
+        }
+        try {
+            order.cancelTask();
+            saveOrders();
+            if (enabled && botReady) {
+                executeDelivery(order);
+            }
+        } catch (Exception exception) {
+            plugin.logWarning("Paid Discord Store order " + order.orderId
+                    + " was accepted but could not start delivery immediately; it remains PAID for recovery.", exception);
+        }
+        return true;
     }
 
     private void executeDelivery(StoreOrder order) {
         if (order == null) return;
-        if (order.status == OrderStatus.DELIVERED) return;
-        if (order.status != OrderStatus.PAID && order.status != OrderStatus.WAITING_PLAYER && order.status != OrderStatus.DELIVERING) {
-            return;
-        }
-        if (!order.deliveryRunning.compareAndSet(false, true)) {
-            return;
-        }
+        long deliveryAttempt = claimDeliveryAttempt(order);
+        if (deliveryAttempt <= 0L) return;
 
-        order.status = OrderStatus.DELIVERING;
-        order.lastMessage = "Đang kiểm tra người chơi và chạy lệnh giao hàng.";
         saveOrders();
         editOrderMessage(order, buildDeliveryRunningEmbed(order), buildOrderComponents(order));
 
+        if (!order.item.requireOnline()) {
+            plugin.getPlatformScheduler().runGlobal(() -> runDeliveryCommands(order, deliveryAttempt));
+            return;
+        }
+
         plugin.getPlatformScheduler().runGlobal(() -> {
-            try {
-                if (order.item.requireOnline()) {
-                    Player target = Bukkit.getPlayerExact(order.playerName);
-                    if (target == null || !target.isOnline()) {
-                        waitForPlayer(order);
-                        return;
-                    }
-                }
-
-                List<String> failedCommands = new ArrayList<>();
-                for (String template : order.item.commands()) {
-                    String command = applyPlaceholders(template, order);
-                    boolean result = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
-                    if (!result) {
-                        failedCommands.add(command);
-                    }
-                }
-
-                if (!failedCommands.isEmpty()) {
-                    failOrder(order, "Một hoặc nhiều lệnh giao hàng trả về thất bại: `" + String.join("`, `", failedCommands) + "`");
+            if (!isCurrentDeliveryAttempt(order, deliveryAttempt)) return;
+            Player target = Bukkit.getPlayerExact(order.playerName);
+            if (target == null) {
+                waitForPlayer(order, deliveryAttempt);
+                return;
+            }
+            Runnable retired = () -> plugin.getPlatformScheduler().runGlobal(
+                    () -> waitForPlayer(order, deliveryAttempt));
+            boolean scheduled = plugin.getPlatformScheduler().runPlayer(target, () -> {
+                if (!isCurrentDeliveryAttempt(order, deliveryAttempt)) return;
+                if (!target.isOnline()) {
+                    retired.run();
                     return;
                 }
-
-                order.status = OrderStatus.DELIVERED;
-                order.completedAtMillis = System.currentTimeMillis();
-                order.lastMessage = "Đơn hàng đã giao tự động thành công.";
-                saveOrders();
-                editOrderMessage(order, buildSuccessEmbed(order), buildOrderComponents(order));
-                sendPurchaseLog(order);
-                plugin.getLogManager().payment("STORE_SUCCESS: " + order.discordName + " bought " + order.item.name()
-                        + " for player " + order.playerName + ", amount " + order.item.price() + " " + plugin.trPlain("general.currency") + ".");
-            } catch (Exception e) {
-                failOrder(order, "Lỗi khi giao hàng: " + e.getMessage());
-                plugin.logWarning("Discord Store delivery failed for order " + order.orderId, e);
-            } finally {
-                order.deliveryRunning.set(false);
+                plugin.getPlatformScheduler().runGlobal(() -> runDeliveryCommands(order, deliveryAttempt));
+            }, retired);
+            if (!scheduled) {
+                retired.run();
             }
         });
     }
 
-    private void waitForPlayer(StoreOrder order) {
-        order.status = OrderStatus.WAITING_PLAYER;
-        order.lastMessage = "Thanh toán đã thành công nhưng người chơi chưa online. Đơn đang treo và sẽ tự giao khi người chơi online.";
+    private void runDeliveryCommands(StoreOrder order, long deliveryAttempt) {
+        if (!isCurrentDeliveryAttempt(order, deliveryAttempt)) return;
+        try {
+            List<String> failedCommands = new ArrayList<>();
+            for (String template : order.item.commands()) {
+                String command = applyPlaceholders(template, order);
+                boolean result = Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
+                if (!result) {
+                    failedCommands.add(command);
+                }
+            }
+
+            if (!failedCommands.isEmpty()) {
+                failDeliveryAttempt(order, deliveryAttempt,
+                        "Một hoặc nhiều lệnh giao hàng trả về thất bại: `" + String.join("`, `", failedCommands) + "`");
+                return;
+            }
+
+            if (!completeDeliveryAttempt(order, deliveryAttempt)) return;
+            saveOrders();
+            editOrderMessage(order, buildSuccessEmbed(order), buildOrderComponents(order));
+            sendPurchaseLog(order);
+            plugin.getLogManager().payment("STORE_SUCCESS: " + order.discordName + " bought " + order.item.name()
+                    + " for player " + order.playerName + ", amount " + order.item.price() + " " + plugin.trPlain("general.currency") + ".");
+        } catch (Exception e) {
+            if (failDeliveryAttempt(order, deliveryAttempt, "Lỗi khi giao hàng: " + e.getMessage())) {
+                plugin.logWarning("Discord Store delivery failed for order " + order.orderId, e);
+            }
+        }
+    }
+
+    private void waitForPlayer(StoreOrder order, long deliveryAttempt) {
+        boolean shouldLog;
+        synchronized (order) {
+            if (order.status != OrderStatus.DELIVERING || order.deliveryAttempt != deliveryAttempt) return;
+            order.lastMessage = "Thanh toán đã thành công nhưng người chơi chưa online. Đơn đang treo và sẽ tự giao khi người chơi online.";
+            shouldLog = !order.waitingPlayerLogged;
+            if (shouldLog) order.waitingPlayerLogged = true;
+            order.status = OrderStatus.WAITING_PLAYER;
+        }
         saveOrders();
         editOrderMessage(order, buildWaitingPlayerEmbed(order), buildOrderComponents(order));
-        if (!order.waitingPlayerLogged) {
-            order.waitingPlayerLogged = true;
+        if (shouldLog) {
             sendWaitingPlayerLog(order);
-            saveOrders();
         }
         plugin.getLogManager().payment("STORE_WAITING_PLAYER: order " + order.orderId + " paid but player " + order.playerName + " is offline.");
     }
 
     private void handleExpiredOrder(StoreOrder order) {
-        if (order.status != OrderStatus.PENDING) return;
-        order.status = OrderStatus.EXPIRED;
-        order.completedAtMillis = System.currentTimeMillis();
-        order.lastMessage = "Đơn hàng hết hạn vì chưa ghi nhận thanh toán.";
+        if (!claimPendingTransition(order, OrderStatus.EXPIRED,
+                "Đơn hàng hết hạn vì chưa ghi nhận thanh toán.",
+                System.currentTimeMillis())) {
+            return;
+        }
         order.cancelTask();
         saveOrders();
         editOrderMessage(order, buildExpiredEmbed(order), List.of());
     }
 
-    private void failOrder(StoreOrder order, String reason) {
-        order.status = OrderStatus.ERROR;
-        order.completedAtMillis = System.currentTimeMillis();
-        order.lastMessage = reason;
+    private boolean failDeliveryAttempt(StoreOrder order, long deliveryAttempt, String reason) {
+        synchronized (order) {
+            if (order.status != OrderStatus.DELIVERING || order.deliveryAttempt != deliveryAttempt) return false;
+            order.completedAtMillis = System.currentTimeMillis();
+            order.lastMessage = reason;
+            order.status = OrderStatus.ERROR;
+        }
         order.cancelTask();
         saveOrders();
         editOrderMessage(order, buildErrorEmbed(order, reason), List.of());
         sendErrorLog(order, reason);
+        return true;
     }
 
     private void editOrderMessage(StoreOrder order, MessageEmbed embed, List<ActionRow> rows) {
@@ -738,7 +1144,8 @@ public final class StoreManager {
     private void editBuyerOrderMessage(StoreOrder order, MessageEmbed embed, List<ActionRow> rows) {
         if (order == null || order.orderMessageId == null || order.orderMessageId.isBlank()) return;
         if (order.discordUserId == null || order.discordUserId.isBlank()) return;
-        JDA current = jda;
+        if (!isValidDiscordId(order.discordUserId) || !isValidDiscordId(order.orderMessageId)) return;
+        JDA current = currentJda();
         if (current == null) return;
 
         current.retrieveUserById(order.discordUserId).queue(user ->
@@ -800,9 +1207,10 @@ public final class StoreManager {
     }
 
     private void sendLog(String channelId, MessageEmbed embed, List<ActionRow> rows) {
-        JDA current = jda;
+        JDA current = currentJda();
         if (current == null || channelId == null || channelId.isBlank() || channelId.contains("DAN_ID")) return;
-        TextChannel channel = current.getTextChannelById(channelId);
+        if (!isValidDiscordId(channelId)) return;
+        GuildMessageChannel channel = current.getChannelById(GuildMessageChannel.class, channelId);
         if (channel == null) return;
         List<ActionRow> safeRows = rows == null ? List.of() : rows;
         channel.sendMessageEmbeds(embed)
@@ -822,6 +1230,23 @@ public final class StoreManager {
         plugin.getPlatformScheduler().runGlobal(() -> retryWaitingOrders(null));
     }
 
+    private void resumeRecoveredOrders(JDA current, long generation) {
+        plugin.getPlatformScheduler().runGlobal(() -> {
+            if (!isCurrentBotSession(current, generation)) return;
+            for (StoreOrder order : orders.values()) {
+                OrderStatus status;
+                synchronized (order) {
+                    status = order.status;
+                }
+                if (status == OrderStatus.PENDING) {
+                    startOrderPaymentPolling(order);
+                } else if (status == OrderStatus.PAID) {
+                    executeDelivery(order);
+                }
+            }
+        });
+    }
+
     private void stopWaitingOrderRetryTask() {
         ScheduledTask task = waitingOrderRetryTask;
         waitingOrderRetryTask = null;
@@ -836,16 +1261,14 @@ public final class StoreManager {
         for (StoreOrder order : orders.values()) {
             if (order.status != OrderStatus.WAITING_PLAYER) continue;
             if (!targetName.isBlank() && !order.playerName.equalsIgnoreCase(targetName)) continue;
-            if (isPlayerOnline(order.playerName)) {
-                executeDelivery(order);
-            }
+            Player target = Bukkit.getPlayerExact(order.playerName);
+            if (target == null) continue;
+            plugin.getPlatformScheduler().runPlayer(target, () -> {
+                if (target.isOnline() && order.status == OrderStatus.WAITING_PLAYER) {
+                    executeDelivery(order);
+                }
+            });
         }
-    }
-
-    private boolean isPlayerOnline(String playerName) {
-        if (playerName == null || playerName.isBlank()) return false;
-        Player target = Bukkit.getPlayerExact(playerName);
-        return target != null && target.isOnline();
     }
 
     private StoreItem findItem(String itemId) {
@@ -874,11 +1297,12 @@ public final class StoreManager {
     }
 
     private String applyPlaceholders(String template, StoreOrder order) {
+        String safeDiscordName = sanitizeCommandArgument(order.discordName);
         return Objects.toString(template, "")
                 .replace("%player%", order.playerName)
                 .replace("{player}", order.playerName)
-                .replace("%buyer%", order.discordName)
-                .replace("%discord_user%", order.discordName)
+                .replace("%buyer%", safeDiscordName)
+                .replace("%discord_user%", safeDiscordName)
                 .replace("%discord_id%", order.discordUserId)
                 .replace("%item%", order.item.key())
                 .replace("%item_name%", order.item.name())
@@ -887,7 +1311,30 @@ public final class StoreManager {
                 .replace("%payment_order%", String.valueOf(order.payment.orderCode()));
     }
 
+    private String sanitizeCommandArgument(String value) {
+        if (value == null || value.isBlank()) return "discord_user";
+        StringBuilder safe = new StringBuilder(Math.min(32, value.length()));
+        for (int offset = 0; offset < value.length() && safe.length() < 32; ) {
+            int codePoint = value.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (Character.isLetterOrDigit(codePoint) || codePoint == '_' || codePoint == '-' || codePoint == '.') {
+                safe.appendCodePoint(codePoint);
+            } else if (safe.length() > 0 && safe.charAt(safe.length() - 1) != '_') {
+                safe.append('_');
+            }
+        }
+        String result = safe.toString();
+        return result.isBlank() ? "discord_user" : result;
+    }
+
     private String getToken() {
+        String environmentVariable = storeConfig.getString("settings.bot-token-environment-variable", "").trim();
+        if (environmentVariable.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+            String environmentToken = System.getenv(environmentVariable);
+            if (environmentToken != null && !environmentToken.isBlank()) {
+                return environmentToken.trim();
+            }
+        }
         return storeConfig.getString("settings.bot-token", "").trim();
     }
 
@@ -991,34 +1438,200 @@ public final class StoreManager {
         return member.getRoles().stream().anyMatch(role -> roleIds.contains(role.getId()));
     }
 
+    private boolean matchesStatusFilter(OrderStatus status, String filter) {
+        return switch (filter) {
+            case "pending", "cho", "chothanhtoan" -> status == OrderStatus.PENDING;
+            case "paid", "dathanhtoan" -> status == OrderStatus.PAID;
+            case "delivered", "dagiao", "success" -> status == OrderStatus.DELIVERED;
+            case "waiting", "treo", "cho nguoi choi" -> status == OrderStatus.WAITING_PLAYER;
+            case "error", "loi" -> status == OrderStatus.ERROR;
+            case "expired", "hethan" -> status == OrderStatus.EXPIRED;
+            case "canceled", "huy" -> status == OrderStatus.CANCELED;
+            case "delivering", "danggiao" -> status == OrderStatus.DELIVERING;
+            default -> false;
+        };
+    }
+
+    private boolean isStoreCommandGuild(Guild interactionGuild) {
+        if (interactionGuild == null) return false;
+
+        String configuredGuildId = storeConfig.getString("settings.admin-command-guild-id", "").trim();
+        if (!configuredGuildId.isBlank() && !configuredGuildId.contains("DAN_ID")) {
+            if (!isValidDiscordId(configuredGuildId) || !configuredGuildId.equals(interactionGuild.getId())) {
+                return false;
+            }
+            JDA current = currentJda();
+            if (current == null) return false;
+            Guild storefrontGuild = resolveConfiguredStorefrontGuild(current);
+            return storefrontGuild == null || storefrontGuild.getId().equals(interactionGuild.getId());
+        }
+
+        JDA current = currentJda();
+        if (current == null) return false;
+        String storefrontChannelId = storeConfig.getString("settings.storefront-channel-id", "").trim();
+        if (isValidDiscordId(storefrontChannelId)) {
+            GuildMessageChannel channel = current.getChannelById(GuildMessageChannel.class, storefrontChannelId);
+            if (channel != null) {
+                return channel.getGuild().getId().equals(interactionGuild.getId());
+            }
+        }
+
+        List<Guild> connectedGuilds = current.getGuilds();
+        return connectedGuilds.size() == 1 && connectedGuilds.get(0).getId().equals(interactionGuild.getId());
+    }
+
+    private boolean isValidDiscordId(String value) {
+        if (value == null || value.isBlank()) return false;
+        try {
+            return Long.parseUnsignedLong(value.trim()) > 0L;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
     private boolean canInteractWithOrder(ButtonInteractionEvent event, StoreOrder order) {
         return order.discordUserId.equals(event.getUser().getId()) || canManageStore(event.getMember());
     }
 
-    private void registerAdminSlashCommand(JDA current) {
-        SlashCommandData command = Commands.slash("kora-admin", "KoraPayments staff tools")
+    private boolean isCurrentBotSession(JDA candidate, long generation) {
+        DiscordBotSession current = botSession;
+        return enabled
+                && botGeneration.get() == generation
+                && current != null
+                && current.generation == generation
+                && candidate == current.jda.get();
+    }
+
+    private void registerStoreSlashCommands(JDA current, long generation) {
+        if (!isCurrentBotSession(current, generation)) return;
+        SlashCommandData adminCommand = Commands.slash("kora-admin", "Công cụ quản trị KoraPayments")
+                .setGuildOnly(true)
                 .addSubcommands(new SubcommandData("kiemtramadon", "Kiểm tra mã đơn Auto Buy")
-                        .addOption(OptionType.STRING, "ma-don", "Mã đơn, mã thanh toán hoặc nội dung chuyển khoản", true));
+                        .addOption(OptionType.STRING, "ma-don", "Mã đơn, mã thanh toán hoặc nội dung chuyển khoản", true))
+                .addSubcommands(new SubcommandData("xemdonhang", "Xem danh sách đơn hàng gần đây")
+                        .addOption(OptionType.STRING, "trang-thai", "Lọc theo trạng thái: pending, paid, delivered, waiting, error, expired, canceled", false))
+                .addSubcommands(new SubcommandData("timdonhang", "Tìm đơn hàng theo tên người chơi")
+                        .addOption(OptionType.STRING, "ten-nguoi-choi", "Tên nhân vật trong game", true));
+        SlashCommandData publishCommand = Commands.slash("taokenhbanhang", "Đăng bảng chọn sản phẩm Auto Buy vào kênh bán hàng")
+                .setGuildOnly(true);
 
         String guildId = storeConfig.getString("settings.admin-command-guild-id", "").trim();
         if (!guildId.isBlank() && !guildId.contains("DAN_ID")) {
-            Guild guild = current.getGuildById(guildId);
-            if (guild == null) {
-                plugin.logWarning("Cannot register /kora-admin in guild " + guildId + ": bot is not in that guild.");
+            if (!isValidDiscordId(guildId)) {
+                plugin.logWarning("Cannot register Discord slash commands: settings.admin-command-guild-id is invalid.");
                 return;
             }
-            guild.upsertCommand(command).queue(
-                    success -> plugin.logInfo("Registered Discord command /kora-admin kiemtramadon in guild " + guild.getName() + "."),
-                    failure -> plugin.logWarning("Cannot register Discord admin command: " + failure.getMessage(), failure));
+            Guild guild = current.getGuildById(guildId);
+            if (guild == null) {
+                plugin.logWarning("Cannot register Discord slash commands in guild " + guildId + ": bot is not in that guild.");
+                return;
+            }
+            Guild storefrontGuild = resolveConfiguredStorefrontGuild(current);
+            if (storefrontGuild != null && !storefrontGuild.getId().equals(guild.getId())) {
+                plugin.logWarning("Cannot register Discord slash commands: settings.admin-command-guild-id and settings.storefront-channel-id belong to different guilds.");
+                return;
+            }
+            cleanupManagedCommandsOutsideGuild(current, guild, generation);
+            upsertGuildCommand(current, guild, adminCommand, "/kora-admin kiemtramadon", generation);
+            upsertGuildCommand(current, guild, publishCommand, "/taokenhbanhang", generation);
             return;
         }
 
-        current.upsertCommand(command).queue(
-                success -> plugin.logInfo("Registered global Discord command /kora-admin kiemtramadon."),
-                failure -> plugin.logWarning("Cannot register global Discord admin command: " + failure.getMessage(), failure));
+        Guild inferredGuild = inferStoreGuild(current);
+        if (inferredGuild != null) {
+            cleanupManagedCommandsOutsideGuild(current, inferredGuild, generation);
+            upsertGuildCommand(current, inferredGuild, adminCommand, "/kora-admin kiemtramadon", generation);
+            upsertGuildCommand(current, inferredGuild, publishCommand, "/taokenhbanhang", generation);
+            return;
+        }
+
+        plugin.logWarning("Cannot determine a safe Discord guild for slash commands. Set settings.admin-command-guild-id in store.yml.");
+    }
+
+    private Guild inferStoreGuild(JDA current) {
+        Guild storefrontGuild = resolveConfiguredStorefrontGuild(current);
+        if (storefrontGuild != null) return storefrontGuild;
+        List<Guild> connectedGuilds = current.getGuilds();
+        return connectedGuilds.size() == 1 ? connectedGuilds.get(0) : null;
+    }
+
+    private Guild resolveConfiguredStorefrontGuild(JDA current) {
+        String storefrontChannelId = storeConfig.getString("settings.storefront-channel-id", "").trim();
+        if (!isValidDiscordId(storefrontChannelId)) return null;
+        GuildMessageChannel channel = current.getChannelById(GuildMessageChannel.class, storefrontChannelId);
+        return channel == null ? null : channel.getGuild();
+    }
+
+    private void cleanupManagedCommandsOutsideGuild(JDA current, Guild targetGuild, long generation) {
+        current.retrieveCommands().queue(
+                commands -> {
+                    if (!isCurrentBotSession(current, generation)) return;
+                    commands.stream()
+                            .filter(command -> isManagedCommandName(command.getName()))
+                            .forEach(command -> command.delete().queue(null,
+                                    failure -> {
+                                        if (isCurrentBotSession(current, generation)) {
+                                            plugin.logDebug("Cannot remove stale global Discord command /" + command.getName() + ": " + failure.getMessage(), failure);
+                                        }
+                                    }));
+                },
+                failure -> {
+                    if (isCurrentBotSession(current, generation)) {
+                        plugin.logDebug("Cannot inspect global Discord commands for cleanup: " + failure.getMessage(), failure);
+                    }
+                });
+
+        for (Guild guild : current.getGuilds()) {
+            if (guild.getId().equals(targetGuild.getId())) continue;
+            guild.retrieveCommands().queue(
+                    commands -> {
+                        if (!isCurrentBotSession(current, generation)) return;
+                        commands.stream()
+                                .filter(command -> isManagedCommandName(command.getName()))
+                                .forEach(command -> command.delete().queue(null,
+                                        failure -> {
+                                            if (isCurrentBotSession(current, generation)) {
+                                                plugin.logDebug("Cannot remove stale Discord command /" + command.getName()
+                                                        + " from guild " + guild.getId() + ": " + failure.getMessage(), failure);
+                                            }
+                                        }));
+                    },
+                    failure -> {
+                        if (isCurrentBotSession(current, generation)) {
+                            plugin.logDebug("Cannot inspect Discord commands in guild " + guild.getId() + " for cleanup: " + failure.getMessage(), failure);
+                        }
+                    });
+        }
+    }
+
+    private boolean isManagedCommandName(String name) {
+        return "kora-admin".equals(name) || "taokenhbanhang".equals(name);
+    }
+
+    private void upsertGuildCommand(JDA current,
+                                    Guild guild,
+                                    SlashCommandData command,
+                                    String displayName,
+                                    long generation) {
+        if (!isCurrentBotSession(current, generation)) return;
+        guild.upsertCommand(command).queue(
+                success -> {
+                    if (isCurrentBotSession(current, generation)) {
+                        plugin.logInfo("Registered Discord command " + displayName + " in guild " + guild.getName() + ".");
+                    }
+                },
+                failure -> {
+                    if (isCurrentBotSession(current, generation)) {
+                        plugin.logWarning("Cannot register Discord command " + displayName + ": " + failure.getMessage(), failure);
+                    }
+                });
     }
 
     private void runSenderMessage(CommandSender sender, String message) {
+        if (sender instanceof Player player) {
+            plugin.getPlatformScheduler().runPlayer(player, () -> player.sendMessage(message));
+            return;
+        }
         plugin.getPlatformScheduler().runGlobal(() -> sender.sendMessage(message));
     }
 
@@ -1038,6 +1651,43 @@ public final class StoreManager {
             } catch (Exception e) {
                 plugin.logWarning("Cannot load stored Discord Store order " + orderId + ": " + e.getMessage(), e);
             }
+        }
+    }
+
+    private void reconcileStoredOrdersOnStartup() {
+        int recoveredPending = 0;
+        int recoveredPaid = 0;
+        int blockedDeliveries = 0;
+        long now = System.currentTimeMillis();
+        for (StoreOrder order : orders.values()) {
+            synchronized (order) {
+                if (order.status == OrderStatus.PENDING) {
+                    recoveredPending++;
+                    continue;
+                }
+                if (order.status == OrderStatus.PAID) {
+                    recoveredPaid++;
+                    continue;
+                }
+                if (order.status != OrderStatus.DELIVERING) continue;
+                order.completedAtMillis = now;
+                order.lastMessage = "Plugin đã dừng khi đơn đang giao. Staff cần kiểm tra thực tế và xử lý thủ công để tránh giao trùng.";
+                order.status = OrderStatus.ERROR;
+                blockedDeliveries++;
+            }
+        }
+        if (blockedDeliveries > 0) {
+            saveOrders();
+            plugin.logWarning("Recovered " + blockedDeliveries
+                    + " Discord Store order(s) left in DELIVERING state as ERROR; manual review is required to prevent duplicate delivery.");
+        }
+        if (recoveredPaid > 0) {
+            plugin.logInfo("Recovered " + recoveredPaid
+                    + " paid Discord Store order(s); delivery will resume after the Discord bot is ready.");
+        }
+        if (recoveredPending > 0) {
+            plugin.logInfo("Recovered " + recoveredPending
+                    + " pending Discord Store order(s); payment checks will resume using their original timeout.");
         }
     }
 
@@ -1103,45 +1753,59 @@ public final class StoreManager {
             for (StoreOrder order : orders.values().stream()
                     .sorted(Comparator.comparingLong(StoreOrder::createdAtMillis).reversed())
                     .toList()) {
-                String path = "orders." + order.orderId;
-                data.set(path + ".status", order.status.name());
-                data.set(path + ".discord-user-id", order.discordUserId);
-                data.set(path + ".discord-name", order.discordName);
-                data.set(path + ".player", order.playerName);
-                data.set(path + ".created-at", order.createdAtMillis);
-                data.set(path + ".paid-at", order.paidAtMillis);
-                data.set(path + ".completed-at", order.completedAtMillis);
-                data.set(path + ".last-message", order.lastMessage);
-                data.set(path + ".waiting-player-logged", order.waitingPlayerLogged);
-                data.set(path + ".discord-order-message-id", order.orderMessageId);
-                data.set(path + ".rating.stars", order.ratingStars);
-                data.set(path + ".rating.rated-at", order.ratedAtMillis);
-
-                data.set(path + ".item.id", order.item.id());
-                data.set(path + ".item.key", order.item.key());
-                data.set(path + ".item.name", order.item.name());
-                data.set(path + ".item.price", order.item.price());
-                data.set(path + ".item.detail", order.item.detail());
-                data.set(path + ".item.require-online", order.item.requireOnline());
-                data.set(path + ".item.commands", order.item.commands());
-
-                data.set(path + ".payment.provider", order.payment.provider());
-                data.set(path + ".payment.order-code", order.payment.orderCode());
-                data.set(path + ".payment.amount", order.payment.amount());
-                data.set(path + ".payment.bank-code", order.payment.bankCode());
-                data.set(path + ".payment.bank-name", order.payment.bankName());
-                data.set(path + ".payment.account-number", order.payment.accountNumber());
-                data.set(path + ".payment.account-name", order.payment.accountName());
-                data.set(path + ".payment.description", order.payment.description());
-                data.set(path + ".payment.qr-code", order.payment.qrCode());
-                data.set(path + ".payment.qr-image-url", order.payment.qrImageUrl());
-                data.set(path + ".payment.checkout-url", order.payment.checkoutUrl());
+                writeStoredOrder(data, order);
             }
             try {
-                data.save(ordersFile);
+                File temporaryFile = new File(ordersFile.getParentFile(), ordersFile.getName() + ".tmp");
+                data.save(temporaryFile);
+                try {
+                    Files.move(temporaryFile.toPath(), ordersFile.toPath(),
+                            StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException ignored) {
+                    Files.move(temporaryFile.toPath(), ordersFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
             } catch (IOException e) {
                 plugin.logWarning("Cannot save store-orders.yml: " + e.getMessage(), e);
             }
+        }
+    }
+
+    private void writeStoredOrder(YamlConfiguration data, StoreOrder order) {
+        synchronized (order) {
+            String path = "orders." + order.orderId;
+            data.set(path + ".status", order.status.name());
+            data.set(path + ".discord-user-id", order.discordUserId);
+            data.set(path + ".discord-name", order.discordName);
+            data.set(path + ".player", order.playerName);
+            data.set(path + ".created-at", order.createdAtMillis);
+            data.set(path + ".paid-at", order.paidAtMillis);
+            data.set(path + ".completed-at", order.completedAtMillis);
+            data.set(path + ".last-message", order.lastMessage);
+            data.set(path + ".waiting-player-logged", order.waitingPlayerLogged);
+            data.set(path + ".discord-order-message-id", order.orderMessageId);
+            data.set(path + ".rating.stars", order.ratingStars);
+            data.set(path + ".rating.rated-at", order.ratedAtMillis);
+
+            data.set(path + ".item.id", order.item.id());
+            data.set(path + ".item.key", order.item.key());
+            data.set(path + ".item.name", order.item.name());
+            data.set(path + ".item.price", order.item.price());
+            data.set(path + ".item.detail", order.item.detail());
+            data.set(path + ".item.require-online", order.item.requireOnline());
+            data.set(path + ".item.commands", order.item.commands());
+
+            data.set(path + ".payment.provider", order.payment.provider());
+            data.set(path + ".payment.order-code", order.payment.orderCode());
+            data.set(path + ".payment.amount", order.payment.amount());
+            data.set(path + ".payment.bank-code", order.payment.bankCode());
+            data.set(path + ".payment.bank-name", order.payment.bankName());
+            data.set(path + ".payment.account-number", order.payment.accountNumber());
+            data.set(path + ".payment.account-name", order.payment.accountName());
+            data.set(path + ".payment.description", order.payment.description());
+            data.set(path + ".payment.qr-code", order.payment.qrCode());
+            data.set(path + ".payment.qr-image-url", order.payment.qrImageUrl());
+            data.set(path + ".payment.checkout-url", order.payment.checkoutUrl());
         }
     }
 
@@ -1158,6 +1822,55 @@ public final class StoreManager {
         }
     }
 
+    private final class DiscordBotSession {
+        private final long generation;
+        private final StoreDiscordListener listener;
+        private final ExecutorService callbackPool;
+        private final ExecutorService eventPool;
+        private final ScheduledExecutorService gatewayPool;
+        private final ScheduledExecutorService rateLimitScheduler;
+        private final ExecutorService rateLimitElastic;
+        private final List<String> executorNames;
+        private final AtomicReference<JDA> jda = new AtomicReference<>();
+        private final AtomicBoolean executorsClosed = new AtomicBoolean(false);
+
+        private DiscordBotSession(long generation) {
+            this.generation = generation;
+            this.listener = new StoreDiscordListener(generation);
+            this.callbackPool = Executors.newFixedThreadPool(2,
+                    new NamedDaemonThreadFactory("KoraPayments-Discord-Callback-g" + generation));
+            this.eventPool = Executors.newSingleThreadExecutor(
+                    new NamedDaemonThreadFactory("KoraPayments-Discord-Event-g" + generation));
+            this.gatewayPool = Executors.newSingleThreadScheduledExecutor(
+                    new NamedDaemonThreadFactory("KoraPayments-Discord-Gateway-g" + generation));
+            this.rateLimitScheduler = Executors.newScheduledThreadPool(2,
+                    new NamedDaemonThreadFactory("KoraPayments-Discord-RateLimit-g" + generation));
+            this.rateLimitElastic = Executors.newCachedThreadPool(
+                    new NamedDaemonThreadFactory("KoraPayments-Discord-RateLimitElastic-g" + generation));
+            this.executorNames = List.of("callback", "event", "gateway", "rate-limit", "rate-limit-elastic");
+        }
+
+        private List<ExecutorService> executors() {
+            return List.of(callbackPool, eventPool, gatewayPool, rateLimitScheduler, rateLimitElastic);
+        }
+    }
+
+    private static final class NamedDaemonThreadFactory implements ThreadFactory {
+        private final String prefix;
+        private final AtomicInteger sequence = new AtomicInteger();
+
+        private NamedDaemonThreadFactory(String prefix) {
+            this.prefix = prefix;
+        }
+
+        @Override
+        public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(runnable, prefix + "-" + sequence.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        }
+    }
+
     private final class StoreServerListener implements Listener {
         @EventHandler
         public void onPlayerJoin(PlayerJoinEvent event) {
@@ -1168,44 +1881,143 @@ public final class StoreManager {
     }
 
     private final class StoreDiscordListener extends ListenerAdapter {
+        private final long generation;
+
+        private StoreDiscordListener(long generation) {
+            this.generation = generation;
+        }
+
+        private boolean isCurrentSession(JDA candidate) {
+            return isCurrentBotSession(candidate, generation);
+        }
+
         @Override
         public void onReady(ReadyEvent event) {
-            botReady = true;
-            registerAdminSlashCommand(event.getJDA());
-            startWaitingOrderRetryTask();
+            // Serialize readiness behind JDABuilder.build() and session assignment. This also
+            // keeps shutdown/awaitShutdown away from JDA's own callback threads.
+            queueReadyEvent(event.getJDA(), generation);
         }
 
         @Override
         public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
-            if (!"kora-admin".equals(event.getName())) return;
-            if (!"kiemtramadon".equals(event.getSubcommandName())) {
-                event.reply("Subcommand không hợp lệ.").setEphemeral(true).queue();
-                return;
-            }
-            if (!canManageStore(event.getMember())) {
-                event.reply("Bạn không có quyền dùng lệnh kiểm tra đơn Auto Buy.").setEphemeral(true).queue();
-                return;
-            }
-
-            String code = event.getOption("ma-don") == null ? "" : event.getOption("ma-don").getAsString();
-            StoreOrder order = findOrderByCode(code);
-            if (order == null) {
-                event.reply("Không tìm thấy đơn với mã `" + limit(code, 80) + "`. Hãy kiểm tra mã đơn, mã thanh toán hoặc nội dung chuyển khoản.")
+            if (!isCurrentSession(event.getJDA())) return;
+            if (!"kora-admin".equals(event.getName()) && !"taokenhbanhang".equals(event.getName())) return;
+            if (!isStoreCommandGuild(event.getGuild())) {
+                event.reply("Lệnh này chỉ dùng được trong máy chủ Discord đã cấu hình cho KoraPayments.")
                         .setEphemeral(true)
                         .queue();
                 return;
             }
-            event.replyEmbeds(buildAdminOrderEmbed(order)).setEphemeral(true).queue();
+            if (!canManageStore(event.getMember())) {
+                event.reply("Bạn không có quyền quản lý cửa hàng KoraPayments.")
+                        .setEphemeral(true)
+                        .queue();
+                return;
+            }
+
+            if ("taokenhbanhang".equals(event.getName())) {
+                String interactionGuildId = event.getGuild().getId();
+                event.deferReply(true).queue(hook -> publishStorefront(interactionGuildId, message ->
+                                hook.editOriginal(plugin.stripColor(message)).queue(
+                                        ignored -> { },
+                                        failure -> plugin.logDebug("Cannot reply to Discord /taokenhbanhang: " + failure.getMessage(), failure))),
+                        failure -> plugin.logWarning("Cannot defer Discord /taokenhbanhang response: " + failure.getMessage(), failure));
+                return;
+            }
+
+            if (!"kiemtramadon".equals(event.getSubcommandName())
+                    && !"xemdonhang".equals(event.getSubcommandName())
+                    && !"timdonhang".equals(event.getSubcommandName())) {
+                event.reply("Subcommand không hợp lệ.").setEphemeral(true).queue();
+                return;
+            }
+
+            if ("kiemtramadon".equals(event.getSubcommandName())) {
+                String code = event.getOption("ma-don") == null ? "" : event.getOption("ma-don").getAsString();
+                StoreOrder order = findOrderByCode(code);
+                if (order == null) {
+                    event.reply("Không tìm thấy đơn với mã `" + limit(code, 80) + "`. Hãy kiểm tra mã đơn, mã thanh toán hoặc nội dung chuyển khoản.")
+                            .setEphemeral(true)
+                            .queue();
+                    return;
+                }
+                event.replyEmbeds(buildAdminOrderEmbed(order)).setEphemeral(true).queue();
+                return;
+            }
+
+            if ("xemdonhang".equals(event.getSubcommandName())) {
+                String statusFilter = event.getOption("trang-thai") == null ? "" : event.getOption("trang-thai").getAsString().trim().toLowerCase(Locale.ROOT);
+                List<StoreOrder> filtered = orders.values().stream()
+                        .filter(order -> statusFilter.isEmpty() || matchesStatusFilter(order.status, statusFilter))
+                        .sorted(Comparator.comparingLong(StoreOrder::createdAtMillis).reversed())
+                        .limit(10)
+                        .toList();
+
+                if (filtered.isEmpty()) {
+                    event.reply("Không có đơn hàng nào" + (statusFilter.isEmpty() ? "" : " với trạng thái `" + statusFilter + "`") + ".")
+                            .setEphemeral(true).queue();
+                    return;
+                }
+
+                StringBuilder sb = new StringBuilder();
+                sb.append("**Danh sách đơn hàng gần đây");
+                if (!statusFilter.isEmpty()) sb.append(" (").append(statusFilter).append(")");
+                sb.append(":**\n\n");
+                for (StoreOrder o : filtered) {
+                    sb.append("`").append(o.orderId).append("` — ")
+                            .append("**").append(o.item.name()).append("** — ")
+                            .append(plugin.formatMoney(o.item.price())).append(" ").append(plugin.trPlain("general.currency"))
+                            .append(" — ").append(displayStatus(o.status))
+                            .append(" — ").append(discordTimestamp(o.createdAtMillis))
+                            .append("\n");
+                }
+                event.reply(sb.toString()).setEphemeral(true).queue();
+                return;
+            }
+
+            if ("timdonhang".equals(event.getSubcommandName())) {
+                String playerName = event.getOption("ten-nguoi-choi") == null ? "" : event.getOption("ten-nguoi-choi").getAsString().trim();
+                if (playerName.isBlank()) {
+                    event.reply("Vui lòng nhập tên người chơi.").setEphemeral(true).queue();
+                    return;
+                }
+
+                List<StoreOrder> playerOrders = orders.values().stream()
+                        .filter(order -> order.playerName.equalsIgnoreCase(playerName))
+                        .sorted(Comparator.comparingLong(StoreOrder::createdAtMillis).reversed())
+                        .limit(10)
+                        .toList();
+
+                if (playerOrders.isEmpty()) {
+                    event.reply("Không tìm thấy đơn hàng nào cho người chơi `" + limit(playerName, 32) + "`.")
+                            .setEphemeral(true).queue();
+                    return;
+                }
+
+                StringBuilder sb = new StringBuilder();
+                sb.append("**Đơn hàng của `").append(limit(playerName, 32)).append("`:**\n\n");
+                for (StoreOrder o : playerOrders) {
+                    sb.append("`").append(o.orderId).append("` — ")
+                            .append("**").append(o.item.name()).append("** — ")
+                            .append(plugin.formatMoney(o.item.price())).append(" ").append(plugin.trPlain("general.currency"))
+                            .append(" — ").append(displayStatus(o.status))
+                            .append(" — ").append(discordTimestamp(o.createdAtMillis))
+                            .append("\n");
+                }
+                event.reply(sb.toString()).setEphemeral(true).queue();
+            }
         }
 
         @Override
         public void onStringSelectInteraction(StringSelectInteractionEvent event) {
+            if (!isCurrentSession(event.getJDA())) return;
             if (!PRODUCT_SELECT_ID.equals(event.getComponentId())) return;
             handleProductSelect(event);
         }
 
         @Override
         public void onModalInteraction(ModalInteractionEvent event) {
+            if (!isCurrentSession(event.getJDA())) return;
             String modalId = event.getModalId();
             if (!modalId.startsWith(CHECKOUT_MODAL_PREFIX)) return;
 
@@ -1228,6 +2040,7 @@ public final class StoreManager {
 
         @Override
         public void onButtonInteraction(ButtonInteractionEvent event) {
+            if (!isCurrentSession(event.getJDA())) return;
             String componentId = event.getComponentId();
             if (componentId.startsWith(CANCEL_BUTTON_PREFIX)) {
                 handleCancelButton(event, componentId.substring(CANCEL_BUTTON_PREFIX.length()));
@@ -1267,7 +2080,7 @@ public final class StoreManager {
 
         private void handleCancelButton(ButtonInteractionEvent event, String orderId) {
             StoreOrder order = orders.get(orderId.toUpperCase(Locale.ROOT));
-            if (order == null || order.status != OrderStatus.PENDING) {
+            if (order == null) {
                 event.reply("Đơn hàng này không còn ở trạng thái chờ thanh toán.").setEphemeral(true).queue();
                 return;
             }
@@ -1276,16 +2089,34 @@ public final class StoreManager {
                 return;
             }
 
-            order.status = OrderStatus.CANCELED;
-            order.completedAtMillis = System.currentTimeMillis();
-            order.lastMessage = "Đơn hàng đã được hủy trước khi thanh toán.";
+            if (!claimPendingTransition(order, OrderStatus.CANCELED,
+                    "Đơn hàng đã được hủy trước khi thanh toán.",
+                    System.currentTimeMillis())) {
+                event.reply("Đơn hàng này không còn ở trạng thái chờ thanh toán.").setEphemeral(true).queue();
+                return;
+            }
             order.cancelTask();
             plugin.getBankPaymentManager().cancelExternalTransaction(order.payment.orderCode());
             saveOrders();
-            event.editMessageEmbeds(buildCanceledEmbed(order))
-                    .setComponents(Collections.emptyList())
-                    .queue(null, failure -> plugin.logDebug("Cannot cancel Discord order message: " + failure.getMessage(), failure));
-            editOrderMessage(order, buildCanceledEmbed(order), List.of());
+
+            synchronized (order) {
+                if (order.status != OrderStatus.CANCELED) {
+                    MessageEmbed currentEmbed = buildCurrentOrderEmbed(order);
+                    List<ActionRow> currentRows = buildOrderComponents(order);
+                    event.editMessageEmbeds(currentEmbed)
+                            .setComponents(currentRows)
+                            .queue(null, failure -> plugin.logDebug("Cannot refresh Discord order after payment won cancellation race: "
+                                    + failure.getMessage(), failure));
+                    editOrderMessage(order, currentEmbed, currentRows);
+                    return;
+                }
+                MessageEmbed canceledEmbed = buildCanceledEmbed(order);
+                event.editMessageEmbeds(canceledEmbed)
+                        .setComponents(Collections.emptyList())
+                        .queue(null, failure -> plugin.logDebug("Cannot cancel Discord order message: " + failure.getMessage(), failure));
+                editOrderMessage(order, canceledEmbed, List.of());
+                return;
+            }
         }
 
         private void handleRerunButton(ButtonInteractionEvent event, String orderId) {
@@ -1307,16 +2138,23 @@ public final class StoreManager {
                 return;
             }
             event.deferReply(true).queue(hook -> {
-                hook.editOriginal("Đã nhận yêu cầu chạy lại đơn `" + order.orderId + "`. Nếu người chơi chưa online, hệ thống sẽ tiếp tục tự kiểm tra và giao ngay khi người chơi vào máy chủ.").queue();
-                plugin.getPlatformScheduler().runGlobal(() -> {
-                    if (isPlayerOnline(order.playerName)) {
-                        executeDelivery(order);
+                String changedStatus = null;
+                synchronized (order) {
+                    if (order.status != OrderStatus.WAITING_PLAYER) {
+                        changedStatus = displayStatus(order.status);
                     } else {
                         order.lastMessage = "Đã bật tự chạy lại. Đơn sẽ được giao khi người chơi online trong máy chủ.";
-                        saveOrders();
-                        editOrderMessage(order, buildWaitingPlayerEmbed(order), buildOrderComponents(order));
                     }
-                });
+                }
+                if (changedStatus != null) {
+                    hook.editOriginal("Đơn `" + order.orderId + "` đã chuyển sang trạng thái `"
+                            + changedStatus + "`; yêu cầu chạy lại không còn cần thiết.").queue();
+                    return;
+                }
+                hook.editOriginal("Đã nhận yêu cầu chạy lại đơn `" + order.orderId + "`. Nếu người chơi chưa online, hệ thống sẽ tiếp tục tự kiểm tra và giao ngay khi người chơi vào máy chủ.").queue();
+                saveOrders();
+                editOrderMessage(order, buildWaitingPlayerEmbed(order), buildOrderComponents(order));
+                plugin.getPlatformScheduler().runGlobal(() -> retryWaitingOrders(order.playerName));
             });
         }
 
@@ -1404,8 +2242,8 @@ public final class StoreManager {
         private final InteractionHook hook;
         private final long createdAtMillis;
         private final AtomicReference<ScheduledTask> task = new AtomicReference<>();
-        private final AtomicBoolean deliveryRunning = new AtomicBoolean(false);
         private volatile OrderStatus status = OrderStatus.PENDING;
+        private long deliveryAttempt;
         private volatile long paidAtMillis;
         private volatile long completedAtMillis;
         private volatile String lastMessage = "";
@@ -1434,6 +2272,17 @@ public final class StoreManager {
 
         private long createdAtMillis() {
             return createdAtMillis;
+        }
+
+        private void attachPaymentTask(ScheduledTask scheduledTask) {
+            if (scheduledTask == null) return;
+            ScheduledTask taskToCancel = scheduledTask;
+            synchronized (this) {
+                if (status == OrderStatus.PENDING) {
+                    taskToCancel = task.getAndSet(scheduledTask);
+                }
+            }
+            if (taskToCancel != null) taskToCancel.cancel();
         }
 
         private void cancelTask() {

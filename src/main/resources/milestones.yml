@@ -1,0 +1,59 @@
+# =============================================================
+# KoraPayments - MỐC NẠP
+# =============================================================
+
+milestones:
+  '50000':
+    rewards: ["give %player% diamond 5"]
+  '100000':
+    rewards: ["give %player% diamond 10"]
+  '150000':
+    rewards: ["give %player% diamond 15"]
+  '200000':
+    rewards: ["give %player% diamond 20"]
+  '500000':
+    rewards:
+      - "give %player% diamond 32"
+      - "broadcast &bKoraPayments &8» &f%player% vừa đạt mốc nạp &a500,000 VNĐ."
+  '1000000':
+    rewards:
+      - "eco give %player% 200000"
+      - "broadcast &bKoraPayments &8» &f%player% vừa đạt mốc nạp &a1,000,000 VNĐ."
+  '2000000':
+    rewards:
+      - "eco give %player% 500000"
+      - "broadcast &bKoraPayments &8» &f%player% vừa đạt mốc nạp &a2,000,000 VNĐ."
+
+server-milestones:
+  enabled: true
+  active-target: 1000000
+  anti-clone:
+    enabled: true
+    minimum-personal-donated: 20000
+    new-player-only: true
+  bossbar:
+    enabled: true
+    color: BLUE
+    style: SEGMENTED_10
+    update-interval-ticks: 100
+    progress-title: "&bMốc nạp server &8» &f{current}&7/&a{target} VNĐ &8(&e{percent}%&8)"
+    reached-title: "&aMáy chủ đã đạt mốc nạp &e{target} VNĐ&a. &eDùng /mocnap server để nhận."
+  milestones:
+    '1000000':
+      rewards: ["give %player% diamond 5"]
+    '2000000':
+      rewards:
+        - "give %player% diamond 10"
+        - "eco give %player% 100000"
+    '3000000':
+      rewards:
+        - "give %player% diamond 15"
+        - "eco give %player% 200000"
+    '4000000':
+      rewards:
+        - "give %player% diamond 20"
+        - "eco give %player% 300000"
+    '5000000':
+      rewards:
+        - "give %player% diamond 32"
+        - "eco give %player% 500000"

@@ -44,7 +44,7 @@ public class BankCommand implements CommandExecutor, TabCompleter {
         if (!plugin.ensureFeatureAvailable(player)) return true;
 
         if (args.length > 0 && args[0].equalsIgnoreCase("gui")) {
-            plugin.getPaymentGuiManager().openBankAmountMenu(player);
+            plugin.getModernPaymentInterfaceManager().openBankAmount(player);
             return true;
         }
 
@@ -67,8 +67,8 @@ public class BankCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        int minAmount = Math.max(1, plugin.getConfig().getInt("napbank.min-amount", 2000));
-        long maxAmount = plugin.getConfig().getLong("napbank.max-amount", 0L);
+        int minAmount = Math.max(1, plugin.config().getInt("napbank.min-amount", 2000));
+        long maxAmount = plugin.config().getLong("napbank.max-amount", 0L);
         if (amountRequested < minAmount) {
             player.sendMessage(plugin.tr("bank.min-amount", "amount", plugin.formatMoney(minAmount)));
             return true;

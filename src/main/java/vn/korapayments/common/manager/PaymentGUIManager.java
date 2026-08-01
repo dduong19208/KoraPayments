@@ -6,13 +6,18 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import vn.korapayments.KoraPayments;
-import vn.korapayments.napcard.api.CardChargingService;
 import vn.korapayments.common.model.PaymentChannel;
+import vn.korapayments.napcard.api.CardChargingService;
+import vn.korapayments.napcard.utils.CardProviderNames;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 public class PaymentGUIManager {
@@ -20,17 +25,17 @@ public class PaymentGUIManager {
     public static final String MENU_CARD_AMOUNT = "napthe_amount";
     public static final String MENU_BANK_AMOUNT = "bank_amount";
 
-    private static final int[] TELCO_SLOTS = {
+    private static final List<Integer> DEFAULT_TELCO_SLOTS = List.of(
             10, 11, 12, 13, 14, 15, 16,
             20, 21, 22, 23, 24,
             29, 30, 31, 32, 33
-    };
+    );
 
-    private static final int[] AMOUNT_SLOTS = {
+    private static final List<Integer> DEFAULT_AMOUNT_SLOTS = List.of(
             10, 11, 12, 13, 14, 15, 16,
             19, 20, 21, 22, 23, 24, 25,
             28, 29, 30, 31, 32, 33, 34
-    };
+    );
 
     private static final List<String> DEFAULT_TELCOS = List.of(
             "VIETTEL", "MOBIFONE", "VINAPHONE", "ZING", "GARENA", "GATE", "VCOIN", "SCOIN"
@@ -51,170 +56,237 @@ public class PaymentGUIManager {
     }
 
     public void openCardProviderMenu(Player player) {
-        CardChargingService service = new CardChargingService(plugin);
+        final String menu = "card-provider";
+        final String root = "menus." + menu;
+        GuiConfigManager gui = plugin.getGuiConfigManager();
+        CardChargingService service = plugin.getCardChargingService();
         String providerName = service.getProviderDisplayName();
         List<String> telcos = getCardTelcos();
+        List<Integer> amounts = getCardAmounts();
 
+        Map<String, String> base = basePlaceholders(player);
+        base.put("provider", providerName);
+        base.put("min_amount", amounts.isEmpty() ? "-" : plugin.formatMoney(amounts.stream().mapToInt(Integer::intValue).min().orElse(0)));
+        base.put("max_amount", amounts.isEmpty() ? "-" : plugin.formatMoney(amounts.stream().mapToInt(Integer::intValue).max().orElse(0)));
+
+        int size = gui.getMenuSize(menu, 45);
         MenuHolder holder = new MenuHolder(MENU_CARD_PROVIDER);
-        Inventory inv = Bukkit.createInventory(holder, 45, plugin.tr("gui.card-provider-title"));
-        fillModernBorder(inv);
+        Inventory inv = Bukkit.createInventory(holder, size,
+                gui.renderText(root + ".title", "{lang:gui.card-provider-title}", base));
+        renderDecorations(inv, menu, base);
 
-        inv.setItem(4, GUIUtils.item(
+        Set<Integer> occupied = new HashSet<>();
+        placeItem(inv, holder, occupied, root + ".items.info", 4,
                 Material.NETHER_STAR,
-                plugin.tr("gui.card-provider-info-title"),
-                plugin.tr("gui.card-provider-info-provider", "provider", providerName),
-                plugin.tr("gui.card-provider-info-step"),
-                " ",
-                plugin.tr("gui.card-provider-info-hint")
-        ));
+                "{lang:gui.card-provider-info-title}",
+                List.of("{lang:gui.card-provider-info-provider}", "{lang:gui.card-provider-info-step}", "", "{lang:gui.card-provider-info-hint}"),
+                base, MenuAction.NONE, null, null);
+        placeItem(inv, holder, occupied, root + ".items.close", 40,
+                Material.BARRIER,
+                "{lang:gui.close-name}",
+                List.of("{lang:gui.close-lore}"),
+                base, MenuAction.CLOSE, null, null);
 
-        for (int i = 0; i < telcos.size() && i < TELCO_SLOTS.length; i++) {
-            String telco = normalizeTelco(telcos.get(i));
-            int slot = TELCO_SLOTS[i];
-            holder.setSlotValue(slot, telco);
-            inv.setItem(slot, GUIUtils.item(
-                    getTelcoMaterial(telco),
-                    plugin.tr("gui.card-telco-name", "telco", formatTelcoName(telco)),
-                    plugin.tr("gui.card-telco-provider", "provider", providerName),
-                    plugin.tr("gui.card-telco-range"),
-                    " ",
-                    plugin.tr("gui.click-select")
-            ));
+        String itemPath = root + ".dynamic.providers";
+        if (gui.getBoolean(itemPath + ".enabled", true)) {
+            List<Integer> slots = gui.getSlots(itemPath + ".slots", DEFAULT_TELCO_SLOTS, size);
+            int valueIndex = 0;
+            for (int slot : slots) {
+                if (valueIndex >= telcos.size()) break;
+                if (occupied.contains(slot)) {
+                    gui.warnLayout(menu + ".slot." + slot,
+                            "slot " + slot + " của providers trùng static item và đã bị bỏ qua.");
+                    continue;
+                }
+
+                String telco = normalizeTelco(telcos.get(valueIndex++));
+                Map<String, String> placeholders = new LinkedHashMap<>(base);
+                placeholders.put("telco", gui.getValueDisplayName(itemPath, telco, formatTelcoName(telco)));
+                ItemStack item = gui.createItem(itemPath, telco, getTelcoMaterial(telco),
+                        "{lang:gui.card-telco-name}",
+                        List.of("{lang:gui.card-telco-provider}", "&7Mệnh giá: &a{min_amount} - {max_amount} VNĐ", "", "{lang:gui.click-select}"),
+                        placeholders);
+                inv.setItem(slot, item);
+                occupied.add(slot);
+                holder.bindAction(slot, gui.getAction(itemPath + ".action", MenuAction.SELECT_CARD_PROVIDER), telco);
+            }
+            warnUnrendered(menu, "providers", telcos.size(), valueIndex);
         }
-
-        inv.setItem(40, closeItem());
         player.openInventory(inv);
     }
 
     public void openCardAmountMenu(Player player, String telco) {
+        final String menu = "card-amount";
+        final String root = "menus." + menu;
+        GuiConfigManager gui = plugin.getGuiConfigManager();
         String normalizedTelco = normalizeTelco(telco);
-        CardChargingService service = new CardChargingService(plugin);
+        CardChargingService service = plugin.getCardChargingService();
         String providerName = service.getProviderDisplayName();
         List<Integer> amounts = getCardAmounts();
         boolean cardPromotionActive = plugin.isPromotionActive(PaymentChannel.CARD);
         int cardPromotionPercent = plugin.getPromotionPercent(PaymentChannel.CARD);
 
+        Map<String, String> base = basePlaceholders(player);
+        base.put("provider", providerName);
+        base.put("telco", gui.getValueDisplayName(root + ".items.info", normalizedTelco, formatTelcoName(normalizedTelco)));
+        base.put("bonus", String.valueOf(cardPromotionPercent));
+
+        int size = gui.getMenuSize(menu, 54);
         MenuHolder holder = new MenuHolder(MENU_CARD_AMOUNT);
         holder.setData("telco", normalizedTelco);
-        Inventory inv = Bukkit.createInventory(holder, 54, plugin.tr("gui.card-amount-title"));
-        fillModernBorder(inv);
+        Inventory inv = Bukkit.createInventory(holder, size,
+                gui.renderText(root + ".title", "{lang:gui.card-amount-title}", base));
+        renderDecorations(inv, menu, base);
 
-        inv.setItem(4, GUIUtils.item(
+        Set<Integer> occupied = new HashSet<>();
+        placeItem(inv, holder, occupied, root + ".items.info", 4,
                 getTelcoMaterial(normalizedTelco),
-                plugin.tr("gui.card-amount-info-title", "telco", formatTelcoName(normalizedTelco)),
-                plugin.tr("gui.card-provider-info-provider", "provider", providerName),
-                plugin.tr("gui.card-amount-info-step"),
-                " ",
-                plugin.tr("gui.card-amount-info-hint")
-        ));
+                "{lang:gui.card-amount-info-title}",
+                List.of("{lang:gui.card-provider-info-provider}", "{lang:gui.card-amount-info-step}", "", "{lang:gui.card-amount-info-hint}"),
+                base, MenuAction.NONE, normalizedTelco, null);
+        placeItem(inv, holder, occupied, root + ".items.back", 45,
+                Material.ARROW, "{lang:gui.back-name}", List.of("{lang:gui.back-lore}"),
+                base, MenuAction.OPEN_CARD_PROVIDER, null, null);
+        placeItem(inv, holder, occupied, root + ".items.help", 49,
+                Material.BOOK, "{lang:gui.card-help-title}",
+                List.of("{lang:gui.card-help-line-1}", "{lang:gui.card-help-line-2}", "{lang:gui.card-help-line-3}"),
+                base, MenuAction.NONE, null, null);
+        placeItem(inv, holder, occupied, root + ".items.close", 53,
+                Material.BARRIER, "{lang:gui.close-name}", List.of("{lang:gui.close-lore}"),
+                base, MenuAction.CLOSE, null, null);
 
-        for (int i = 0; i < amounts.size() && i < AMOUNT_SLOTS.length; i++) {
-            int amount = amounts.get(i);
-            int slot = AMOUNT_SLOTS[i];
-            holder.setSlotValue(slot, String.valueOf(amount));
+        String itemPath = root + ".dynamic.amounts";
+        if (gui.getBoolean(itemPath + ".enabled", true)) {
+            List<Integer> slots = gui.getSlots(itemPath + ".slots", DEFAULT_AMOUNT_SLOTS, size);
+            int valueIndex = 0;
+            for (int slot : slots) {
+                if (valueIndex >= amounts.size()) break;
+                if (occupied.contains(slot)) {
+                    gui.warnLayout(menu + ".slot." + slot,
+                            "slot " + slot + " của amounts trùng static item và đã bị bỏ qua.");
+                    continue;
+                }
 
-            List<String> lore = new ArrayList<>();
-            lore.add(plugin.tr("gui.card-amount-lore-amount", "amount", plugin.formatMoney(amount)));
-            double discount = plugin.isCardTaxesEnabled()
-                    ? plugin.getCardRateManager().getDiscountRate(normalizedTelco, amount)
-                    : 0.0D;
-            int netAmount = (int) (amount * (1.0 - (discount / 100.0)));
-            int basePoints = netAmount / plugin.getCardRewardRatio();
-            int points = plugin.applyPromotionToPoints(basePoints, PaymentChannel.CARD);
-            if (plugin.isCardTaxesEnabled()) {
-                lore.add(plugin.tr("gui.card-amount-lore-tax", "tax", formatPercent(discount)));
+                int amount = amounts.get(valueIndex++);
+                double discount = plugin.isCardTaxesEnabled()
+                        ? plugin.getCardRateManager().getDiscountRate(normalizedTelco, amount)
+                        : 0.0D;
+                int netAmount = (int) (amount * (1.0D - (discount / 100.0D)));
+                int basePoints = netAmount / plugin.getCardRewardRatio();
+                int points = plugin.applyPromotionToPoints(basePoints, PaymentChannel.CARD);
+
+                Map<String, String> placeholders = new LinkedHashMap<>(base);
+                placeholders.put("raw_amount", String.valueOf(amount));
+                placeholders.put("amount", plugin.formatMoney(amount));
+                placeholders.put("tax", formatPercent(discount));
+                placeholders.put("net_amount", plugin.formatMoney(netAmount));
+                placeholders.put("points", plugin.formatMoney(points));
+                placeholders.put("tax_line", plugin.isCardTaxesEnabled()
+                        ? plugin.tr("gui.card-amount-lore-tax", "tax", formatPercent(discount)) : "");
+                placeholders.put("receive_line", plugin.tr("gui.card-amount-lore-receive", "amount", plugin.formatMoney(netAmount)));
+                placeholders.put("promotion_line", cardPromotionActive
+                        ? plugin.tr("gui.card-amount-lore-promotion", "bonus", cardPromotionPercent) : "");
+
+                ItemStack item = gui.createItem(itemPath, Material.GOLD_INGOT,
+                        "{lang:gui.amount-item-name}",
+                        List.of("{lang:gui.card-amount-lore-amount}", "{tax_line}",
+                                "{receive_line}", "{lang:gui.card-amount-lore-points}",
+                                "{promotion_line}", "", "{lang:gui.click-select}"),
+                        placeholders);
+                inv.setItem(slot, item);
+                occupied.add(slot);
+                holder.bindAction(slot, gui.getAction(itemPath + ".action", MenuAction.START_CARD_PAYMENT), String.valueOf(amount));
             }
-            lore.add(plugin.tr("gui.card-amount-lore-receive", "amount", plugin.formatMoney(netAmount)));
-            lore.add(plugin.tr("gui.card-amount-lore-points", "points", plugin.formatMoney(points)));
-            if (cardPromotionActive) {
-                lore.add(plugin.tr("gui.card-amount-lore-promotion", "bonus", cardPromotionPercent));
-            }
-            lore.add(" ");
-            lore.add(plugin.tr("gui.click-select"));
-
-            inv.setItem(slot, GUIUtils.item(
-                    Material.GOLD_INGOT,
-                    plugin.tr("gui.amount-item-name", "amount", plugin.formatMoney(amount)),
-                    lore.toArray(new String[0])
-            ));
+            warnUnrendered(menu, "amounts", amounts.size(), valueIndex);
         }
-
-        inv.setItem(45, backItem());
-        inv.setItem(49, GUIUtils.item(
-                Material.BOOK,
-                plugin.tr("gui.card-help-title"),
-                plugin.tr("gui.card-help-line-1"),
-                plugin.tr("gui.card-help-line-2"),
-                plugin.tr("gui.card-help-line-3")
-        ));
-        inv.setItem(53, closeItem());
         player.openInventory(inv);
     }
 
     public void openBankAmountMenu(Player player) {
+        final String menu = "bank-amount";
+        final String root = "menus." + menu;
+        GuiConfigManager gui = plugin.getGuiConfigManager();
         List<Long> amounts = getBankAmounts();
-        MenuHolder holder = new MenuHolder(MENU_BANK_AMOUNT);
-        Inventory inv = Bukkit.createInventory(holder, 54, plugin.tr("gui.bank-amount-title"));
-        fillModernBorder(inv);
-
-        long maxAmount = plugin.getConfig().getLong("napbank.max-amount", 0L);
+        long minAmount = getBankMinAmount();
+        long maxAmount = plugin.config().getLong("napbank.max-amount", 0L);
         boolean bankPromotionActive = plugin.isPromotionActive(PaymentChannel.BANK);
         int bankPromotionPercent = plugin.getPromotionPercent(PaymentChannel.BANK);
-        inv.setItem(4, GUIUtils.item(
-                Material.EMERALD,
-                plugin.tr("gui.bank-info-title"),
-                plugin.tr("gui.bank-info-provider", "provider", getBankProviderDisplayName()),
-                plugin.tr("gui.bank-info-min", "amount", plugin.formatMoney(getBankMinAmount())),
-                plugin.tr("gui.bank-info-max", "amount", maxAmount > 0 ? plugin.formatMoney(maxAmount) : plugin.trPlain("general.no-limit")),
-                " ",
-                plugin.tr("gui.bank-info-hint")
-        ));
+
+        Map<String, String> base = basePlaceholders(player);
+        base.put("provider", getBankProviderDisplayName());
+        base.put("min_amount", plugin.formatMoney(minAmount));
+        base.put("max_amount", maxAmount > 0 ? plugin.formatMoney(maxAmount) : plugin.trPlain("general.no-limit"));
+        base.put("min_line", plugin.tr("gui.bank-info-min", "amount", plugin.formatMoney(minAmount)));
+        base.put("max_line", plugin.tr("gui.bank-info-max", "amount",
+                maxAmount > 0 ? plugin.formatMoney(maxAmount) : plugin.trPlain("general.no-limit")));
+        base.put("bonus", String.valueOf(bankPromotionPercent));
+
+        int size = gui.getMenuSize(menu, 54);
+        MenuHolder holder = new MenuHolder(MENU_BANK_AMOUNT);
+        Inventory inv = Bukkit.createInventory(holder, size,
+                gui.renderText(root + ".title", "{lang:gui.bank-amount-title}", base));
+        renderDecorations(inv, menu, base);
+
+        Set<Integer> occupied = new HashSet<>();
+        placeItem(inv, holder, occupied, root + ".items.info", 4,
+                Material.EMERALD, "{lang:gui.bank-info-title}",
+                List.of("{lang:gui.bank-info-provider}", "{min_line}", "{max_line}", "", "{lang:gui.bank-info-hint}"),
+                base, MenuAction.NONE, null, null);
+        placeItem(inv, holder, occupied, root + ".items.help", 49,
+                Material.MAP, "{lang:gui.bank-help-title}",
+                List.of("{lang:gui.bank-help-line-1}", "{lang:gui.bank-help-line-2}", "{lang:gui.bank-help-line-3}"),
+                base, MenuAction.NONE, null, null);
+        placeItem(inv, holder, occupied, root + ".items.close", 53,
+                Material.BARRIER, "{lang:gui.close-name}", List.of("{lang:gui.close-lore}"),
+                base, MenuAction.CLOSE, null, null);
 
         if (amounts.isEmpty()) {
-            inv.setItem(22, GUIUtils.item(
-                    Material.BARRIER,
-                    plugin.tr("gui.no-data"),
-                    plugin.tr("gui.bank-no-amounts")
-            ));
+            placeItem(inv, holder, occupied, root + ".items.no-data", 22,
+                    Material.BARRIER, "{lang:gui.no-data}", List.of("{lang:gui.bank-no-amounts}"),
+                    base, MenuAction.NONE, null, null);
         } else {
-            for (int i = 0; i < amounts.size() && i < AMOUNT_SLOTS.length; i++) {
-                long amount = amounts.get(i);
-                int slot = AMOUNT_SLOTS[i];
-                holder.setSlotValue(slot, String.valueOf(amount));
-                int points = plugin.calculateFinalPoints(amount, PaymentChannel.BANK);
-                inv.setItem(slot, GUIUtils.item(
-                        Material.EMERALD,
-                        plugin.tr("gui.amount-item-name", "amount", plugin.formatMoney(amount)),
-                        plugin.tr("gui.bank-amount-lore-amount", "amount", plugin.formatMoney(amount)),
-                        plugin.tr("gui.bank-amount-lore-points", "points", plugin.formatMoney(points)),
-                        bankPromotionActive ? plugin.tr("gui.bank-amount-lore-promotion", "bonus", bankPromotionPercent) : " ",
-                        " ",
-                        plugin.tr("gui.click-select")
-                ));
+            String itemPath = root + ".dynamic.amounts";
+            if (gui.getBoolean(itemPath + ".enabled", true)) {
+                List<Integer> slots = gui.getSlots(itemPath + ".slots", DEFAULT_AMOUNT_SLOTS, size);
+                int valueIndex = 0;
+                for (int slot : slots) {
+                    if (valueIndex >= amounts.size()) break;
+                    if (occupied.contains(slot)) {
+                        gui.warnLayout(menu + ".slot." + slot,
+                                "slot " + slot + " của amounts trùng static item và đã bị bỏ qua.");
+                        continue;
+                    }
+
+                    long amount = amounts.get(valueIndex++);
+                    int points = plugin.calculateFinalPoints(amount, PaymentChannel.BANK);
+                    Map<String, String> placeholders = new LinkedHashMap<>(base);
+                    placeholders.put("raw_amount", String.valueOf(amount));
+                    placeholders.put("amount", plugin.formatMoney(amount));
+                    placeholders.put("points", plugin.formatMoney(points));
+                    placeholders.put("promotion_line", bankPromotionActive
+                            ? plugin.tr("gui.bank-amount-lore-promotion", "bonus", bankPromotionPercent) : "");
+
+                    ItemStack item = gui.createItem(itemPath, Material.EMERALD,
+                            "{lang:gui.amount-item-name}",
+                            List.of("{lang:gui.bank-amount-lore-amount}", "{lang:gui.bank-amount-lore-points}",
+                                    "{promotion_line}", "", "{lang:gui.click-select}"),
+                            placeholders);
+                    inv.setItem(slot, item);
+                    occupied.add(slot);
+                    holder.bindAction(slot, gui.getAction(itemPath + ".action", MenuAction.START_BANK_PAYMENT), String.valueOf(amount));
+                }
+                warnUnrendered(menu, "amounts", amounts.size(), valueIndex);
             }
         }
-
-        inv.setItem(49, GUIUtils.item(
-                Material.MAP,
-                plugin.tr("gui.bank-help-title"),
-                plugin.tr("gui.bank-help-line-1"),
-                plugin.tr("gui.bank-help-line-2"),
-                plugin.tr("gui.bank-help-line-3")
-        ));
-        inv.setItem(53, closeItem());
         player.openInventory(inv);
     }
 
     public List<String> getCardTelcos() {
-        CardChargingService service = new CardChargingService(plugin);
+        CardChargingService service = plugin.getCardChargingService();
         String provider = service.getProvider();
         List<String> configured = getConfiguredStringList("napthe.gui.providers." + provider + ".telcos");
-        if (configured.isEmpty()) {
-            configured = getConfiguredStringList("napthe.gui.telcos");
-        }
-        if (configured.isEmpty()) {
-            configured = DEFAULT_TELCOS;
-        }
+        if (configured.isEmpty()) configured = getConfiguredStringList("napthe.gui.telcos");
+        if (configured.isEmpty()) configured = DEFAULT_TELCOS;
 
         Set<String> unique = new LinkedHashSet<>();
         for (String telco : configured) {
@@ -230,7 +302,7 @@ public class PaymentGUIManager {
 
     public List<Long> getBankAmounts() {
         long minAmount = getBankMinAmount();
-        long maxAmount = plugin.getConfig().getLong("napbank.max-amount", 0L);
+        long maxAmount = plugin.config().getLong("napbank.max-amount", 0L);
         List<Long> configured = getConfiguredLongList("napbank.gui.amounts", DEFAULT_BANK_AMOUNTS);
         List<Long> filtered = new ArrayList<>();
         for (long amount : configured) {
@@ -242,40 +314,68 @@ public class PaymentGUIManager {
     }
 
     public boolean isCardTelcoAllowed(String telco) {
-        String normalized = normalizeTelco(telco);
-        return getCardTelcos().contains(normalized);
+        return getCardTelcos().contains(normalizeTelco(telco));
     }
 
     public boolean isCardAmountAllowed(int amount) {
         return getCardAmounts().contains(amount);
     }
 
-    private void fillModernBorder(Inventory inv) {
-        ItemStack black = GUIUtils.item(Material.BLACK_STAINED_GLASS_PANE, " ");
-        ItemStack cyan = GUIUtils.item(Material.CYAN_STAINED_GLASS_PANE, " ");
-        GUIUtils.fillBorder(inv, black);
-        if (inv.getSize() >= 9) {
-            inv.setItem(0, cyan);
-            inv.setItem(8, cyan);
-            inv.setItem(inv.getSize() - 9, cyan);
-            inv.setItem(inv.getSize() - 1, cyan);
+    private void renderDecorations(Inventory inv, String menu, Map<String, String> placeholders) {
+        GuiConfigManager gui = plugin.getGuiConfigManager();
+        String root = "menus." + menu + ".decorations";
+        if (gui.getBoolean(root + ".border.enabled", true)) {
+            ItemStack border = gui.createItem(root + ".border", Material.BLACK_STAINED_GLASS_PANE,
+                    " ", List.of(), placeholders);
+            GUIUtils.fillBorder(inv, border);
+        }
+        if (gui.getBoolean(root + ".accents.enabled", true)) {
+            List<Integer> cornerDefaults = List.of(0, 8, inv.getSize() - 9, inv.getSize() - 1);
+            List<Integer> slots = gui.getSlots(root + ".accents.slots", cornerDefaults, inv.getSize());
+            ItemStack accent = gui.createItem(root + ".accents", Material.CYAN_STAINED_GLASS_PANE,
+                    " ", List.of(), placeholders);
+            for (int slot : slots) inv.setItem(slot, accent);
         }
     }
 
-    private ItemStack closeItem() {
-        return GUIUtils.item(
-                Material.BARRIER,
-                plugin.tr("gui.close-name"),
-                plugin.tr("gui.close-lore")
-        );
+    private void placeItem(Inventory inv,
+                           MenuHolder holder,
+                           Set<Integer> occupied,
+                           String itemPath,
+                           int fallbackSlot,
+                           Material fallbackMaterial,
+                           String fallbackName,
+                           List<String> fallbackLore,
+                           Map<String, String> placeholders,
+                           MenuAction fallbackAction,
+                           String valueMaterialKey,
+                           String payload) {
+        GuiConfigManager gui = plugin.getGuiConfigManager();
+        if (!gui.getBoolean(itemPath + ".enabled", true)) return;
+        int slot = gui.getSlot(itemPath + ".slot", fallbackSlot, inv.getSize());
+        if (slot < 0) return;
+        if (!occupied.add(slot)) {
+            gui.warnLayout(itemPath + ".slot." + slot,
+                    "slot " + slot + " bị trùng static item; item sau đã bị bỏ qua.");
+            return;
+        }
+        ItemStack item = valueMaterialKey == null
+                ? gui.createItem(itemPath, fallbackMaterial, fallbackName, fallbackLore, placeholders)
+                : gui.createItem(itemPath, valueMaterialKey, fallbackMaterial, fallbackName, fallbackLore, placeholders);
+        inv.setItem(slot, item);
+        holder.bindAction(slot, gui.getAction(itemPath + ".action", fallbackAction), payload);
     }
 
-    private ItemStack backItem() {
-        return GUIUtils.item(
-                Material.ARROW,
-                plugin.tr("gui.back-name"),
-                plugin.tr("gui.back-lore")
-        );
+    private Map<String, String> basePlaceholders(Player player) {
+        Map<String, String> placeholders = new LinkedHashMap<>();
+        placeholders.put("player", player.getName());
+        return placeholders;
+    }
+
+    private void warnUnrendered(String menu, String type, int totalValues, int renderedValues) {
+        if (renderedValues >= totalValues) return;
+        plugin.getGuiConfigManager().warnLayout(menu + "." + type + ".capacity",
+                "chỉ hiển thị " + renderedValues + "/" + totalValues + " mục vì không đủ slot hợp lệ.");
     }
 
     private Material getTelcoMaterial(String telco) {
@@ -294,46 +394,30 @@ public class PaymentGUIManager {
     }
 
     private String formatTelcoName(String telco) {
-        String normalized = normalizeTelco(telco);
-        return switch (normalized) {
-            case "MOBIFONE" -> "MobiFone";
-            case "VINAPHONE" -> "VinaPhone";
-            case "VIETNAMOBILE", "VNMOBI" -> "Vietnamobile";
-            case "VCOIN" -> "VCoin";
-            case "SCOIN" -> "SCoin";
-            default -> normalized;
-        };
+        return CardProviderNames.displayName(telco);
     }
 
     private String normalizeTelco(String telco) {
-        if (telco == null) return "";
-        return telco.trim()
-                .replace(" ", "")
-                .replace("-", "")
-                .replace(".", "")
-                .toUpperCase(Locale.ROOT);
+        return CardProviderNames.normalize(telco);
     }
 
     private String formatPercent(double value) {
-        if (Math.abs(value - Math.rint(value)) < 0.0001) {
-            return String.valueOf((int) Math.rint(value));
-        }
+        if (Math.abs(value - Math.rint(value)) < 0.0001) return String.valueOf((int) Math.rint(value));
         return String.format(Locale.US, "%.1f", value);
     }
 
     private long getBankMinAmount() {
-        return Math.max(1L, plugin.getConfig().getLong("napbank.min-amount", 2000L));
+        return Math.max(1L, plugin.config().getLong("napbank.min-amount", 2000L));
     }
 
     private String getBankProviderDisplayName() {
-        String provider = plugin.getConfig().getString("napbank.provider", "payos");
-        if (provider == null) return "PayOS";
+        String provider = plugin.getBankProviderName();
         return provider.equalsIgnoreCase("sepay") ? "SePay" : "PayOS";
     }
 
     private List<String> getConfiguredStringList(String path) {
         List<String> output = new ArrayList<>();
-        List<?> raw = plugin.getConfig().getList(path);
+        List<?> raw = plugin.config().getList(path);
         if (raw == null) return output;
         for (Object value : raw) {
             if (value == null) continue;
@@ -345,7 +429,7 @@ public class PaymentGUIManager {
 
     private List<Integer> getConfiguredIntList(String path, List<Integer> fallback) {
         Set<Integer> unique = new LinkedHashSet<>();
-        List<?> raw = plugin.getConfig().getList(path);
+        List<?> raw = plugin.config().getList(path);
         if (raw != null) {
             for (Object value : raw) {
                 Integer parsed = parseInt(value);
@@ -358,7 +442,7 @@ public class PaymentGUIManager {
 
     private List<Long> getConfiguredLongList(String path, List<Long> fallback) {
         Set<Long> unique = new LinkedHashSet<>();
-        List<?> raw = plugin.getConfig().getList(path);
+        List<?> raw = plugin.config().getList(path);
         if (raw != null) {
             for (Object value : raw) {
                 Long parsed = parseLong(value);
@@ -371,14 +455,18 @@ public class PaymentGUIManager {
 
     private Integer parseInt(Object value) {
         Long parsed = parseLong(value);
-        if (parsed == null || parsed > Integer.MAX_VALUE) return null;
+        if (parsed == null || parsed < Integer.MIN_VALUE || parsed > Integer.MAX_VALUE) return null;
         return parsed.intValue();
     }
 
     private Long parseLong(Object value) {
         if (value == null) return null;
         if (value instanceof Number number) {
-            return number.longValue();
+            try {
+                return new BigDecimal(number.toString()).longValueExact();
+            } catch (NumberFormatException | ArithmeticException ignored) {
+                return null;
+            }
         }
         try {
             return Long.parseLong(String.valueOf(value).replace(",", "").trim());

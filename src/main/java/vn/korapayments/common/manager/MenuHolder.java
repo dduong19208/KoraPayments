@@ -10,6 +10,7 @@ public class MenuHolder implements InventoryHolder {
     private final String menuId;
     private final Map<String, String> data = new HashMap<>();
     private final Map<Integer, String> slotValues = new HashMap<>();
+    private final Map<Integer, ActionBinding> slotActions = new HashMap<>();
 
     public MenuHolder(String menuId) {
         this.menuId = menuId;
@@ -44,8 +45,22 @@ public class MenuHolder implements InventoryHolder {
         return slotValues.get(slot);
     }
 
+    public void bindAction(int slot, MenuAction action, String payload) {
+        if (slot < 0 || action == null || action == MenuAction.NONE) {
+            slotActions.remove(slot);
+            return;
+        }
+        slotActions.put(slot, new ActionBinding(action, payload));
+    }
+
+    public ActionBinding getAction(int slot) {
+        return slotActions.get(slot);
+    }
+
     @Override
     public Inventory getInventory() {
         return null;
     }
+
+    public record ActionBinding(MenuAction action, String payload) {}
 }

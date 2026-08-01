@@ -14,11 +14,11 @@
 
 <p align="center">
   <a href="https://github.com/dduong19208/KoraPayments/releases/latest">
-    <img src="https://img.shields.io/badge/Release-v1.3.1-2ea44f?style=for-the-badge" alt="Release v1.3.1">
+    <img src="https://img.shields.io/badge/Release-v1.4.0-2ea44f?style=for-the-badge" alt="Release v1.4.0">
   </a>
   <img src="https://img.shields.io/badge/Minecraft-1.21.x-brightgreen?style=for-the-badge" alt="Minecraft">
-  <img src="https://img.shields.io/badge/Java-17+-orange?style=for-the-badge" alt="Java">
-  <img src="https://img.shields.io/badge/Paper%20%2F%20Spigot%20%2F%20Folia-Supported-blue?style=for-the-badge" alt="Platform">
+  <img src="https://img.shields.io/badge/Java-21+-orange?style=for-the-badge" alt="Java">
+  <img src="https://img.shields.io/badge/Bukkit%20%2F%20Spigot%20%2F%20Paper%20%2F%20Folia%20%2F%20Leaf-Supported-blue?style=for-the-badge" alt="Platform">
 </p>
 <div align="center">
 
@@ -35,7 +35,7 @@
 Plugin được thiết kế theo hướng thân thiện với server production:
 
 - Tách module rõ ràng giữa nạp bank, nạp thẻ, mốc nạp, giao diện, Discord Store và PlaceholderAPI.
-- Hỗ trợ **Paper/Spigot 1.21.x** và khai báo **Folia supported**.
+- Hỗ trợ **Bukkit/Spigot/Paper/Folia/Leaf 1.21.x**.
 - Có scheduler tương thích nền tảng để giảm rủi ro chạy task sai thread trên Folia.
 - Có log giao dịch, chống spam log và tùy chọn ghi log bất đồng bộ.
 - Có nhiều ngôn ngữ sẵn trong thư mục `languages`.
@@ -52,7 +52,7 @@ Plugin được thiết kế theo hướng thân thiện với server production
 Sau khi mở trang Releases, tải file:
 
 ```text
-KoraPayments-1.3.1.jar
+KoraPayments-1.4.0.jar
 ```
 
 > Không tải source code `.zip`/`.tar.gz` nếu bạn chỉ muốn cài plugin vào server. Hãy tải file `.jar` trong phần **Assets** của release.
@@ -66,6 +66,7 @@ KoraPayments-1.3.1.jar
 - Hỗ trợ provider: **SePay** và **PayOS**.
 - Tạo giao dịch theo số tiền người chơi nhập.
 - Hỗ trợ giao diện chọn mệnh giá bằng `/bank gui`.
+- Hỗ trợ SQLite, MySQL, MariaDB và PostgreSQL.
 - Hiển thị thông tin chuyển khoản và QR thanh toán trong game.
 - Tự kiểm tra giao dịch theo chu kỳ cấu hình.
 - Hỗ trợ giới hạn số tiền tối thiểu/tối đa và timeout giao dịch.
@@ -74,10 +75,10 @@ KoraPayments-1.3.1.jar
 ### 🧾 Nạp thẻ cào
 
 - Hỗ trợ provider: **Card2K** và **GachTheFast**.
-- Có GUI chọn nhà mạng/mệnh giá bằng `/napthe gui`.
+- Có Dialog UI trên Paper/Leaf và inventory/chat fallback bằng `/napthe gui`.
 - Có thể nhập serial/mã thẻ trực tiếp bằng command.
 - Hỗ trợ chiết khấu theo mệnh giá hoặc theo nhà mạng.
-- Hỗ trợ command thưởng sau khi nạp thành công.
+- Hỗ trợ nhiều command thưởng theo thứ tự sau khi nạp thành công.
 - Hỗ trợ khuyến mãi riêng cho nạp thẻ.
 
 ### 🎁 Mốc nạp cá nhân và toàn server
@@ -107,6 +108,7 @@ KoraPayments-1.3.1.jar
 - Hỗ trợ trạng thái đơn đang chờ người chơi online.
 - Có log đơn thành công, đơn lỗi và feedback sau mua.
 - Có slash command staff để kiểm tra mã đơn.
+- Có slash command Discord `/taokenhbanhang` để đăng storefront mà không cần vào Minecraft.
 
 ### 🧩 PlaceholderAPI
 
@@ -123,9 +125,9 @@ Xem đầy đủ tại: [docs/PLACEHOLDERS.md](docs/PLACEHOLDERS.md)
 
 | Thành phần | Yêu cầu |
 |---|---|
-| Java | Java 17 trở lên |
-| Server | Paper/Spigot 1.21.x |
-| Folia | Có khai báo `folia-supported: true` |
+| Java | Java 21 trở lên |
+| Server | Bukkit/Spigot/Paper/Folia/Leaf 1.21.x |
+| Folia | Có khai báo `folia-supported: true` và scheduler tương thích |
 | PlaceholderAPI | Tùy chọn, dùng nếu cần placeholder |
 | Plugin điểm/coin/economy | Tùy chọn, phụ thuộc command thưởng bạn cấu hình |
 | Discord Bot | Chỉ cần nếu bật Discord Auto Buy |
@@ -134,7 +136,7 @@ Xem đầy đủ tại: [docs/PLACEHOLDERS.md](docs/PLACEHOLDERS.md)
 
 ## 📦 Hướng dẫn cài đặt nhanh
 
-1. Tải file `KoraPayments-1.3.1.jar` tại [Releases](../../releases/latest).
+1. Tải file `KoraPayments-1.4.0.jar` tại [Releases](../../releases/latest).
 2. Dừng server Minecraft.
 3. Chép file `.jar` vào thư mục:
 
@@ -153,6 +155,12 @@ plugins/KoraPayments/
 
 ```text
 config.yml
+database.yml
+payments.yml
+providers/*.yml
+discord.yml
+milestones.yml
+gui.yml
 store.yml
 languages/vi.yml
 ```
@@ -181,44 +189,31 @@ language: "vi"
 
 Ngôn ngữ có sẵn: `vi`, `en`, `es`, `fr`, `de`, `pt`, `ru`, `zh`, `ja`, `ko`, `th`, `id`, `ms`, `tl`, `hi`, `ar`, `tr`, `pl`.
 
-### Nạp ngân hàng bằng SePay
+### Chọn provider
 
 ```yaml
-napbank:
-  provider: "sepay"
-  min-amount: 2000
-  timeout-seconds: 600
-  poll-every-seconds: 10
-
-sepay:
-  api-token: "TOKEN_CUA_BAN"
-  bank-code: "MBBank"
-  bank-name: "MB Bank"
-  account-number: "SO_TAI_KHOAN"
-  account-name: "TEN_CHU_TAI_KHOAN"
-  payment-format: "{playername} TENCUM {ordercode}"
+providers:
+  bank: "sepay"          # sepay | payos
+  card: "gachthefast"    # gachthefast | card2k
+  economy: "command"     # command | auto | vault | playerpoints | fancyeco
 ```
 
-> Không bỏ `{ordercode}` khỏi `payment-format`, vì plugin cần mã này để đối soát giao dịch.
+API key/tài khoản được tách riêng trong `providers/*.yml`.
 
-### Nạp thẻ bằng GachTheFast
+### Database
 
 ```yaml
-napthe:
-  provider: "gachthefast"
-
-gachthefast:
-  api:
-    partner_id: "PARTNER_ID"
-    partner_key: "PARTNER_KEY"
-    wallet_id: "WALLET_ID"
+database:
+  type: sqlite # sqlite | mysql | mariadb | postgresql
 ```
 
-### Lệnh thưởng sau khi nạp bank/thủ công
+### Nhiều lệnh thưởng
 
 ```yaml
-reward-command: "p give {player} {points}"
-conversion-rate: 1
+economy:
+  reward-commands:
+    - "p give {player} {points}"
+    - "crate key give {player} napthe 1"
 ```
 
 Công thức mặc định:
@@ -294,7 +289,7 @@ Ví dụ:
 
 ## 🛠 Build từ source
 
-Yêu cầu máy build có **Java 17+** và **Maven 3.9+**.
+Yêu cầu máy build có **Java 21+** và **Maven 3.9+**.
 
 ```bash
 git clone https://github.com/YOUR_ORG/KoraPayments.git
@@ -305,7 +300,7 @@ mvn clean package
 File `.jar` sau build nằm tại:
 
 ```text
-target/KoraPayments-1.3.1.jar
+target/KoraPayments-1.4.0.jar
 ```
 
 ---
@@ -315,13 +310,13 @@ target/KoraPayments-1.3.1.jar
 Repo này đã có workflow tự build và đính kèm `.jar` khi tạo tag dạng `v*`.
 
 ```bash
-git tag v1.3.1
-git push origin v1.3.1
+git tag v1.4.0
+git push origin v1.4.0
 ```
 
 Sau đó mở tab **Actions** hoặc **Releases** trên GitHub để kiểm tra file jar đã được attach vào release.
 
-Nội dung release mẫu có tại: [GITHUB_RELEASE_v1.3.1.md](GITHUB_RELEASE_v1.3.1.md)
+Nội dung release có tại: [GITHUB_RELEASE_v1.4.0.md](GITHUB_RELEASE_v1.4.0.md)
 
 ---
 
@@ -360,7 +355,11 @@ Xem thêm: [SECURITY.md](SECURITY.md)
 
 ```text
 src/main/java/vn/korapayments/       Source plugin
-src/main/resources/config.yml        Cấu hình chính
+src/main/resources/config.yml        Provider selector/cấu hình chung
+src/main/resources/database.yml      SQLite/MySQL/MariaDB/PostgreSQL
+src/main/resources/payments.yml      Bank, thẻ, economy và reward
+src/main/resources/providers/        API từng provider
+src/main/resources/gui.yml            Giao diện tùy chỉnh
 src/main/resources/store.yml         Cấu hình Discord Auto Buy
 src/main/resources/languages/        Ngôn ngữ hiển thị
 docs/                                Tài liệu sử dụng chi tiết

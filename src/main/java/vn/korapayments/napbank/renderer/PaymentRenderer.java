@@ -36,11 +36,16 @@ public class PaymentRenderer extends MapRenderer {
     private boolean done = false;
 
     public PaymentRenderer(String qrData) {
-        KoraPayments.getInstance().getPlatformScheduler().runAsync(() -> {
+        KoraPayments plugin = KoraPayments.getInstance();
+        if (plugin == null) {
+            this.finalImage = buildErrorImage();
+            return;
+        }
+        plugin.getPlatformScheduler().runAsync(() -> {
             try {
                 this.finalImage = buildQrOnlyImage(qrData);
             } catch (Exception e) {
-                KoraPayments.getInstance().logWarning("Cannot render QR map: " + e.getMessage(), e);
+                plugin.logWarning("Cannot render QR map: " + e.getMessage(), e);
                 this.finalImage = buildErrorImage();
             }
         });
@@ -99,8 +104,11 @@ public class PaymentRenderer extends MapRenderer {
             BufferedImage image = ImageIO.read(input);
 
             if (image == null) {
-                KoraPayments.getInstance().logDebug("QR image URL: " + imageUrl);
-                KoraPayments.getInstance().logDebug("QR image content-type: " + contentType);
+                KoraPayments plugin = KoraPayments.getInstance();
+                if (plugin != null) {
+                    plugin.logDebug("QR image URL: " + imageUrl);
+                    plugin.logDebug("QR image content-type: " + contentType);
+                }
                 throw new IllegalStateException("ImageIO cannot read QR image from URL");
             }
 
