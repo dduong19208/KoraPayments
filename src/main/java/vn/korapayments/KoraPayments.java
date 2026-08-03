@@ -73,7 +73,8 @@ import java.util.logging.Level;
 
 public class KoraPayments extends JavaPlugin {
     private static final List<String> PLACEHOLDER_IDENTIFIERS = List.of("kp", "korapayments");
-    private static final String SUPPORT_DISCORD = "lz.dy.dg";
+    private static final String AUTHOR_DISCORD = "lz.dy.dg";
+    private static final String DEFAULT_SUPPORT_DISCORD_URL = "https://dsc.gg/korapayments";
     private static final int BSTATS_PLUGIN_ID = 31772;
 
     private static KoraPayments instance;
@@ -256,7 +257,8 @@ public class KoraPayments extends JavaPlugin {
         getLogger().info(yellow + " Status   " + green + "Loaded successfully" + reset);
         getLogger().info(yellow + " Version  " + white + version + reset);
         getLogger().info(yellow + " Author   " + white + author + reset);
-        getLogger().info(yellow + " Discord  " + white + SUPPORT_DISCORD + reset);
+        getLogger().info(yellow + " Author Discord " + white + AUTHOR_DISCORD + reset);
+        getLogger().info(yellow + " Discord Support " + white + getSupportDiscordUrl() + reset);
         getLogger().info(yellow + " Platform " + white + serverName + " / " + serverVersion + reset);
         getLogger().info(yellow + " Database " + white
                 + (databaseManager == null ? "Unavailable" : databaseManager.getBackendName()) + reset);
@@ -847,6 +849,20 @@ public class KoraPayments extends JavaPlugin {
             return configurationManager.config();
         }
         return super.getConfig();
+    }
+
+    public String getSupportDiscordUrl() {
+        String configured = config().getString("support.discord-url", DEFAULT_SUPPORT_DISCORD_URL);
+        if (configured == null || configured.isBlank()) {
+            return DEFAULT_SUPPORT_DISCORD_URL;
+        }
+        return configured.trim();
+    }
+
+    public void sendSupportLink(CommandSender sender) {
+        if (sender == null) return;
+        sender.sendMessage(ChatColor.AQUA + "Discord Support: "
+                + ChatColor.WHITE + getSupportDiscordUrl());
     }
 
     public ConfigurationManager getConfigurationManager() {

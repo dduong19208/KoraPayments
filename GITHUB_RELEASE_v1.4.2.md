@@ -23,3 +23,7 @@
 - `mvn clean package`: PASS.
 - Regression tests: 2/2 PASS với Adventure 4.26.1.
 - Local staging SHA-256: `EDB3CE8EAF99A9CC5CA0D0475007606B92D85BB49143C3AB5B11A9BF69037716`.
+
+## Hỗ trợ và góp ý
+
+**Discord Support:** [https://dsc.gg/korapayments](https://dsc.gg/korapayments)

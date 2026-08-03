@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Thêm link Discord Support có thể cấu hình, hiển thị trong banner console, lệnh thông tin và tài liệu dự án.
+
 ## 1.4.2
 
 ### Fixed

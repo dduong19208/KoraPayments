@@ -180,6 +180,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         for (String line : plugin.trList("admin.help")) {
             sender.sendMessage(line);
         }
+        plugin.sendSupportLink(sender);
     }
 
     private void sendStatus(CommandSender sender) {
@@ -208,6 +209,7 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         )) {
             sender.sendMessage(line);
         }
+        plugin.sendSupportLink(sender);
     }
 
     private List<String> filter(List<String> suggestions, String token) {

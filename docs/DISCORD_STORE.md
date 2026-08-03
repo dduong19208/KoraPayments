@@ -143,3 +143,9 @@ Dùng để kiểm tra mã đơn khi người chơi báo lỗi.
 6. Provider nạp bank đã cấu hình đúng chưa.
 7. Server Minecraft có online trong lúc bot xử lý đơn không.
 8. Dùng `/taokenhbanhang status` để kiểm tra nhanh.
+
+---
+
+## Hỗ trợ và góp ý
+
+**Discord Support:** [https://dsc.gg/korapayments](https://dsc.gg/korapayments)

@@ -27,6 +27,7 @@ public class PublicCommand implements CommandExecutor, TabCompleter {
         for (String line : plugin.trList("admin.help")) {
             sender.sendMessage(line);
         }
+        plugin.sendSupportLink(sender);
         return true;
     }
 

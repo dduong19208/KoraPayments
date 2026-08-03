@@ -1,11 +1,17 @@
 # Support
 
+> **Discord Support:** [https://dsc.gg/korapayments](https://dsc.gg/korapayments)
+
+Bạn có thể tham gia máy chủ Discord để nhận hỗ trợ, báo lỗi hoặc gửi góp ý trực tiếp.
+
+**Author Discord:** `lz.dy.dg`
+
 Trước khi tạo issue, vui lòng kiểm tra nhanh các bước sau.
 
 ## Checklist chung
 
-1. Server đang chạy Java 17+.
-2. File jar đúng version `KoraPayments-1.3.1.jar`.
+1. Server đang chạy Java 21+.
+2. File jar đúng version `KoraPayments-1.4.2.jar`.
 3. `/kora-admin status` không báo provider sai.
 4. `config.yml` không bị lỗi YAML.
 5. Token/API key provider chưa hết hạn.

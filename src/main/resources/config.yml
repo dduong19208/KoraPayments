@@ -1,6 +1,7 @@
 # =============================================================
 # KoraPayments v1.4.2 - CẤU HÌNH CHUNG
 # Tác giả: DuyDuong | Discord: lz.dy.dg | Gmail: dduong19208@gmail.com
+# Discord Support: https://dsc.gg/korapayments
 # =============================================================
 # Cấu hình đã được chia nhỏ để dễ quản lý:
 # - database.yml                  Cơ sở dữ liệu
@@ -17,6 +18,11 @@
 
 config-version: 2
 language: "vi"
+
+# Link góp ý và hỗ trợ hiển thị trong banner console cùng các lệnh thông tin.
+# Server cũ chưa có mục này vẫn tự dùng link mặc định bên dưới.
+support:
+  discord-url: "https://dsc.gg/korapayments"
 
 # =============================================================
 # CHỌN PROVIDER - CHỈ CẦN SỬA TẠI ĐÂY

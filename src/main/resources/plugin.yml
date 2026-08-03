@@ -4,6 +4,7 @@ main: vn.korapayments.KoraPayments
 api-version: 1.21
 folia-supported: true
 author: DuyDuong
+website: "https://dsc.gg/korapayments"
 softdepend: [PlaceholderAPI, Vault, PlayerPoints, FancyEco, FancyEconomy, FancyEconomyCore]
 
 commands:

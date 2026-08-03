@@ -132,7 +132,7 @@ Alias:
 /kora
 ```
 
-Hiển thị trang help/thông tin plugin. Nếu nhập keyword admin, plugin sẽ nhắc dùng `/kora-admin`.
+Hiển thị trang help/thông tin plugin và link Discord Support. Nếu nhập keyword admin, plugin sẽ nhắc dùng `/kora-admin`.
 
 ---
 
@@ -266,3 +266,9 @@ Quyền dùng lệnh phụ thuộc vào:
 
 - Role trong `settings.admin-role-ids`.
 - Hoặc quyền Discord Administrator / Manage Server.
+
+---
+
+## Hỗ trợ và góp ý
+
+**Discord Support:** [https://dsc.gg/korapayments](https://dsc.gg/korapayments)
