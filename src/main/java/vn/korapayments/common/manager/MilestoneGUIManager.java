@@ -1,6 +1,7 @@
 package vn.korapayments.common.manager;
 
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
@@ -69,7 +70,11 @@ public class MilestoneGUIManager {
             lore.add(plugin.tr("milestone-gui.donated", "amount", GUIUtils.formatMoney(total)));
             lore.add(statusLine);
             lore.add(" ");
-            appendRewards(lore, section.getStringList(milestoneKey + ".rewards"));
+            appendRewards(
+                    lore,
+                    section.getStringList(milestoneKey + ".rewards"),
+                    section.getStringList(milestoneKey + "." + MilestoneManager.DISPLAY_REWARDS_KEY)
+            );
 
             if (!claimed && reached) {
                 lore.add(" ");
@@ -78,7 +83,9 @@ public class MilestoneGUIManager {
 
             inv.setItem(MILESTONE_SLOTS[index], GUIUtils.item(
                     material,
-                    plugin.tr("milestone-gui.item-title", "amount", GUIUtils.formatMoney(milestone)),
+                    plugin.tr("milestone-gui.item-title",
+                            "amount", GUIUtils.formatMoney(milestone),
+                            "number", index + 1),
                     lore.toArray(new String[0])
             ));
 
@@ -172,7 +179,11 @@ public class MilestoneGUIManager {
             }
             lore.add(statusLine);
             lore.add(" ");
-            appendRewards(lore, section.getStringList(milestoneKey + ".rewards"));
+            appendRewards(
+                    lore,
+                    section.getStringList(milestoneKey + ".rewards"),
+                    section.getStringList(milestoneKey + "." + MilestoneManager.DISPLAY_REWARDS_KEY)
+            );
 
             if (claimState.claimable()) {
                 lore.add(" ");
@@ -184,7 +195,9 @@ public class MilestoneGUIManager {
 
             inv.setItem(MILESTONE_SLOTS[index], GUIUtils.item(
                     material,
-                    plugin.tr("server-milestone-gui.item-title", "amount", GUIUtils.formatMoney(milestone)),
+                    plugin.tr("server-milestone-gui.item-title",
+                            "amount", GUIUtils.formatMoney(milestone),
+                            "number", index + 1),
                     lore.toArray(new String[0])
             ));
 
@@ -209,16 +222,25 @@ public class MilestoneGUIManager {
         inv.setItem(inv.getSize() - 1, GUIUtils.item(Material.CYAN_STAINED_GLASS_PANE, " "));
     }
 
-    private void appendRewards(List<String> lore, List<String> rewards) {
+    private void appendRewards(List<String> lore, List<String> rewards, List<String> displayRewards) {
         if (rewards.isEmpty()) {
             lore.add(plugin.tr("milestone-gui.reward-missing"));
             return;
         }
 
         lore.add(plugin.tr("milestone-gui.rewards"));
+        if (displayRewards != null && !displayRewards.isEmpty()) {
+            for (String displayReward : displayRewards) {
+                lore.add("§f- " + ChatColor.translateAlternateColorCodes('&', displayReward));
+            }
+            lore.add(plugin.tr("milestone-gui.reward-count", "count", displayRewards.size()));
+            return;
+        }
+
         for (String reward : rewards) {
             lore.add("§f- " + formatReward(reward));
         }
+        lore.add(plugin.tr("milestone-gui.reward-count", "count", rewards.size()));
     }
 
     private String formatReward(String command) {

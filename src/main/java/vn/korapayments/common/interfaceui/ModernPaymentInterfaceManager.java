@@ -510,20 +510,57 @@ public final class ModernPaymentInterfaceManager {
                                                    String name,
                                                    boolean requireStatic,
                                                    Object[] arguments) throws NoSuchMethodException {
+            Method inaccessibleMatch = null;
             for (Method method : type.getMethods()) {
-                if (!method.getName().equals(name) || method.getParameterCount() != arguments.length) continue;
-                if (requireStatic != Modifier.isStatic(method.getModifiers())) continue;
-                Class<?>[] parameterTypes = method.getParameterTypes();
-                boolean compatible = true;
-                for (int index = 0; index < parameterTypes.length; index++) {
-                    if (!isCompatible(parameterTypes[index], arguments[index])) {
-                        compatible = false;
-                        break;
-                    }
-                }
-                if (compatible) return method;
+                if (!isCompatibleMethod(method, name, requireStatic, arguments)) continue;
+                if (Modifier.isPublic(method.getDeclaringClass().getModifiers())) return method;
+                inaccessibleMatch = method;
+            }
+
+            // Adventure and Paper commonly return package-private builder
+            // implementations. Invoking a public method declared by such an
+            // implementation is rejected by newer Java runtimes. Resolve the
+            // same method through its public API interface instead.
+            if (!requireStatic && inaccessibleMatch != null) {
+                Method publicDeclaration = findPublicInterfaceMethod(type, name, arguments);
+                if (publicDeclaration != null) return publicDeclaration;
             }
             throw new NoSuchMethodException(type.getName() + "#" + name + "/" + arguments.length);
+        }
+
+        private static Method findPublicInterfaceMethod(Class<?> type,
+                                                        String name,
+                                                        Object[] arguments) {
+            for (Class<?> interfaceType : type.getInterfaces()) {
+                for (Method method : interfaceType.getMethods()) {
+                    if (Modifier.isPublic(method.getDeclaringClass().getModifiers())
+                            && isCompatibleMethod(method, name, false, arguments)) {
+                        return method;
+                    }
+                }
+
+                Method inherited = findPublicInterfaceMethod(interfaceType, name, arguments);
+                if (inherited != null) return inherited;
+            }
+
+            Class<?> superclass = type.getSuperclass();
+            return superclass == null
+                    ? null
+                    : findPublicInterfaceMethod(superclass, name, arguments);
+        }
+
+        private static boolean isCompatibleMethod(Method method,
+                                                  String name,
+                                                  boolean requireStatic,
+                                                  Object[] arguments) {
+            if (!method.getName().equals(name) || method.getParameterCount() != arguments.length) return false;
+            if (requireStatic != Modifier.isStatic(method.getModifiers())) return false;
+
+            Class<?>[] parameterTypes = method.getParameterTypes();
+            for (int index = 0; index < parameterTypes.length; index++) {
+                if (!isCompatible(parameterTypes[index], arguments[index])) return false;
+            }
+            return true;
         }
 
         private static Method findMethod(Class<?> type,

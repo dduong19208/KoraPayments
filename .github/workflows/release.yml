@@ -22,11 +22,11 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Build with Maven
-        run: mvn -B -DskipTests package
+      - name: Build and test
+        run: mvn --batch-mode --no-transfer-progress clean verify
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/KoraPayments-1.4.0.jar
-          body_path: GITHUB_RELEASE_v1.4.0.md
+          files: target/KoraPayments-1.4.2.jar
+          body_path: GITHUB_RELEASE_v1.4.2.md

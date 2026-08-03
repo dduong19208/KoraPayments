@@ -122,6 +122,10 @@ public class MilestoneCommand implements TabExecutor {
             return handleSetTarget(sender, args);
         }
 
+        if (isRequirementSubCommand(sub)) {
+            return handlePersonalRequirement(sender, args);
+        }
+
         if (isBossBarSubCommand(sub)) {
             String action = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "status";
             return handleGlobalBossBarAction(sender, action);
@@ -137,7 +141,7 @@ public class MilestoneCommand implements TabExecutor {
         }
 
         if (args.length == 1) {
-            return filterSuggestions(List.of("set", "bossbar", "help"), args[0]);
+            return filterSuggestions(List.of("set", "dieukien", "bossbar", "help"), args[0]);
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("set")) {
@@ -147,6 +151,17 @@ public class MilestoneCommand implements TabExecutor {
                 suggestions.add(String.valueOf(milestone));
             }
             return filterSuggestions(suggestions, args[1]);
+        }
+
+        if (args.length == 2 && isRequirementSubCommand(args[0])) {
+            List<String> suggestions = plugin.getMilestoneManager().getServerMilestones().stream()
+                    .map(String::valueOf)
+                    .collect(Collectors.toList());
+            return filterSuggestions(suggestions, args[1]);
+        }
+
+        if (args.length == 3 && isRequirementSubCommand(args[0])) {
+            return filterSuggestions(List.of("0", "20000", "50000", "100000", "macdinh"), args[2]);
         }
 
         if (args.length == 2 && isBossBarSubCommand(args[0])) {
@@ -206,6 +221,58 @@ public class MilestoneCommand implements TabExecutor {
         if (!plugin.getMilestoneManager().isServerMilestoneConfigured(amount)) {
             sender.sendMessage(plugin.tr("server-milestone.set-warning-no-config", "amount", GUIUtils.formatMoney(amount)));
         }
+        return true;
+    }
+
+    private boolean handlePersonalRequirement(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            sender.sendMessage(plugin.tr("server-milestone.requirement-usage"));
+            return true;
+        }
+
+        long milestone;
+        try {
+            milestone = parseAmount(args[1]);
+        } catch (NumberFormatException e) {
+            sender.sendMessage(plugin.tr("general.invalid-number"));
+            return true;
+        }
+
+        if (!plugin.getMilestoneManager().isServerMilestoneConfigured(milestone)) {
+            sender.sendMessage(plugin.tr("server-milestone.requirement-milestone-missing",
+                    "amount", GUIUtils.formatMoney(milestone)));
+            return true;
+        }
+
+        String value = normalize(args[2]);
+        if (value.equals("default") || value.equals("macdinh") || value.equals("mac-dinh")
+                || value.equals("inherit") || value.equals("ke-thua") || value.equals("kethua")) {
+            plugin.getMilestoneManager().setServerMilestonePersonalRequirement(milestone, null);
+            sender.sendMessage(plugin.tr("server-milestone.requirement-default",
+                    "milestone", GUIUtils.formatMoney(milestone),
+                    "required", GUIUtils.formatMoney(plugin.getMilestoneManager().getServerMilestoneMinimumPersonalDonated())));
+            return true;
+        }
+
+        long minimumPersonalDonated;
+        try {
+            minimumPersonalDonated = parseAmount(args[2]);
+        } catch (NumberFormatException e) {
+            sender.sendMessage(plugin.tr("general.invalid-number"));
+            return true;
+        }
+
+        if (minimumPersonalDonated < 0L) {
+            sender.sendMessage(plugin.tr("general.invalid-number"));
+            return true;
+        }
+
+        plugin.getMilestoneManager().setServerMilestonePersonalRequirement(milestone, minimumPersonalDonated);
+        sender.sendMessage(plugin.tr(minimumPersonalDonated == 0L
+                        ? "server-milestone.requirement-disabled"
+                        : "server-milestone.requirement-success",
+                "milestone", GUIUtils.formatMoney(milestone),
+                "required", GUIUtils.formatMoney(minimumPersonalDonated)));
         return true;
     }
 
@@ -348,6 +415,15 @@ public class MilestoneCommand implements TabExecutor {
         return sub.equals("bossbar") || sub.equals("bar");
     }
 
+    private boolean isRequirementSubCommand(String subCommand) {
+        String sub = normalize(subCommand);
+        return sub.equals("dieukien")
+                || sub.equals("dieu-kien")
+                || sub.equals("dieu_kien")
+                || sub.equals("requirement")
+                || sub.equals("condition");
+    }
+
     private boolean isHelpSubCommand(String subCommand) {
         String sub = normalize(subCommand);
         return sub.equals("help") || sub.equals("?");
@@ -395,6 +471,7 @@ public class MilestoneCommand implements TabExecutor {
     private void sendAdminHelp(CommandSender sender) {
         sender.sendMessage(plugin.tr("server-milestone.admin-help-header"));
         sender.sendMessage(plugin.tr("server-milestone.help-set"));
+        sender.sendMessage(plugin.tr("server-milestone.help-requirement"));
         sender.sendMessage(plugin.tr("server-milestone.help-bossbar-global"));
     }
 }
