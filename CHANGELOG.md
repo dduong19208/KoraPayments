@@ -1,10 +1,22 @@
 # Changelog
 
-## Unreleased
+## 1.4.3
+
+### Added
+
+- Thêm `support.discord-url` với mặc định `https://dsc.gg/korapayments`.
+- Hiển thị Discord Support trong banner console, `/korapayments`, `/kora-admin` và `/kora-admin status`.
+- Thêm Discord Support vào metadata plugin, README, tài liệu và trang chọn GitHub Issue.
 
 ### Changed
 
-- Thêm link Discord Support có thể cấu hình, hiển thị trong banner console, lệnh thông tin và tài liệu dự án.
+- Làm mới README theo bố cục gọn, hiện đại và thống nhất với tài liệu dự án.
+- Giữ riêng thông tin tác giả `Discord: lz.dy.dg` và liên kết cộng đồng Discord Support.
+
+### Compatibility
+
+- Server cũ thiếu key mới vẫn tự dùng link mặc định; plugin không ghi đè cấu hình hiện tại.
+- Không thay đổi database, claim, provider hoặc luồng thanh toán đang hoạt động.
 
 ## 1.4.2
 

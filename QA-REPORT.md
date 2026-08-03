@@ -1,6 +1,6 @@
-# KoraPayments 1.4.2 - QA Report
+# KoraPayments 1.4.3 - QA Report
 
-Ngày kiểm tra gần nhất: 2026-08-01
+Ngày kiểm tra gần nhất: 2026-08-03
 
 ## Phạm vi thay đổi
 
@@ -44,7 +44,7 @@ Kiểm tra bổ sung ngày 2026-08-03:
 - Bukkit `YamlConfiguration` parse: PASS, 30/30 tệp YAML.
 - `gui.yml` version 2, `economy.reward-commands` và ba provider selector: PASS.
 - `config.yml`, `payments.yml`, `gui.yml` trong JAR khớp byte với source: PASS.
-- Local staging JAR 1.4.2 SHA-256: `EDB3CE8EAF99A9CC5CA0D0475007606B92D85BB49143C3AB5B11A9BF69037716`.
+- Local staging JAR 1.4.3 SHA-256: `46F6BA180BCEA125CC5695B625764835E0938E2BF0B49749B6798E3F0A919D3B`.
 
 Chưa thực hiện integration test trực tiếp trên:
 
@@ -64,7 +64,7 @@ mvn clean verify
 JAR dự kiến:
 
 ```text
-target/KoraPayments-1.4.2.jar
+target/KoraPayments-1.4.3.jar
 ```
 
 ## Ghi chú EzPay

@@ -11,7 +11,7 @@ Trước khi tạo issue, vui lòng kiểm tra nhanh các bước sau.
 ## Checklist chung
 
 1. Server đang chạy Java 21+.
-2. File jar đúng version `KoraPayments-1.4.2.jar`.
+2. File jar đúng version `KoraPayments-1.4.3.jar`.
 3. `/kora-admin status` không báo provider sai.
 4. `config.yml` không bị lỗi YAML.
 5. Token/API key provider chưa hết hạn.

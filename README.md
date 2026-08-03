@@ -57,15 +57,14 @@ KoraPayments hợp nhất các luồng nạp tiền, phát thưởng và đối 
 | Economy | Command, Auto, Vault, PlayerPoints, FancyEco/FancyEconomy |
 | Database | SQLite, MySQL, MariaDB, PostgreSQL |
 
-## Có gì mới trong 1.4.2
+## Có gì mới trong 1.4.3
 
-- Khắc phục `IllegalAccessException` của Native Dialog UI trên Paper/Leaf 1.21.11.
-- Giữ nguyên inventory/chat fallback khi Dialog API không khả dụng.
-- Thêm regression test với Adventure 4.26.1 cho reflection bridge.
-- Bao gồm cải tiến 1.4.1: `minimum-personal-donated`, `display-rewards` và lệnh chỉnh điều kiện riêng cho từng mốc nạp server.
-- Không thay đổi schema database, claim hoặc cấu hình người dùng hiện có.
+- Thêm Discord Support có thể cấu hình và hiển thị trong banner console cùng các lệnh thông tin.
+- Bổ sung badge, liên kết góp ý, trang GitHub Issue và tài liệu hỗ trợ thống nhất.
+- Giữ riêng `Author Discord: lz.dy.dg` và `Discord Support: https://dsc.gg/korapayments`.
+- Không thay đổi schema database, claim, provider hoặc luồng thanh toán hiện có.
 
-Xem toàn bộ thay đổi tại [CHANGELOG.md](CHANGELOG.md) và hướng dẫn nâng cấp tại [UPGRADE-1.4.2.md](UPGRADE-1.4.2.md).
+Xem toàn bộ thay đổi tại [CHANGELOG.md](CHANGELOG.md) và hướng dẫn nâng cấp tại [UPGRADE-1.4.3.md](UPGRADE-1.4.3.md).
 
 ## Tương thích
 
@@ -82,7 +81,7 @@ Plugin khai báo `folia-supported: true` và sử dụng scheduler thích ứng 
 
 ## Cài đặt nhanh
 
-1. Tải `KoraPayments-1.4.2.jar` từ [GitHub Releases](https://github.com/dduong19208/KoraPayments/releases/latest).
+1. Tải `KoraPayments-1.4.3.jar` từ [GitHub Releases](https://github.com/dduong19208/KoraPayments/releases/latest).
 2. Dừng hoàn toàn Minecraft server.
 3. Đặt JAR vào thư mục `plugins/`.
 4. Khởi động server một lần để tạo cấu hình mặc định.
@@ -211,7 +210,7 @@ mvn clean package
 JAR đầu ra:
 
 ```text
-target/KoraPayments-1.4.2.jar
+target/KoraPayments-1.4.3.jar
 ```
 
 Project có regression test cho Dialog reflection bridge. GitHub Actions chạy `mvn clean verify` cho mọi push và pull request trước khi tạo artifact.

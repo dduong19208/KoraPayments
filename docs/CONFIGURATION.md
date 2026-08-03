@@ -1,6 +1,6 @@
 # Configuration - KoraPayments
 
-KoraPayments 1.4.2 tách cấu hình theo chức năng trong `plugins/KoraPayments/`:
+KoraPayments 1.4.3 tách cấu hình theo chức năng trong `plugins/KoraPayments/`:
 
 ```text
 config.yml

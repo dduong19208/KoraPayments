@@ -1,5 +1,5 @@
 name: KoraPayments
-version: 1.4.2
+version: 1.4.3
 main: vn.korapayments.KoraPayments
 api-version: 1.21
 folia-supported: true
