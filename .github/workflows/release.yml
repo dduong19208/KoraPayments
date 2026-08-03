@@ -28,5 +28,5 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/KoraPayments-1.4.2.jar
-          body_path: GITHUB_RELEASE_v1.4.2.md
+          files: target/KoraPayments-1.4.3.jar
+          body_path: GITHUB_RELEASE_v1.4.3.md

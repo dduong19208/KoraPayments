@@ -138,3 +138,9 @@ Nếu placeholder hiện nguyên text `%kp_...%`, hãy kiểm tra:
 2. `/kora-admin status` có báo PlaceholderAPI enabled không.
 3. Identifier `kp` có bị plugin khác chiếm không.
 4. Thử alias `%korapayments_...%`.
+
+---
+
+## Hỗ trợ và góp ý
+
+**Discord Support:** [https://dsc.gg/korapayments](https://dsc.gg/korapayments)

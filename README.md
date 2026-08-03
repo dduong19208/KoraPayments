@@ -1,204 +1,112 @@
 <p align="center">
-  <img src="assets/banner.png" alt="KoraPayments - Modern Minecraft Payment Plugin" width="100%">
+  <img src="assets/banner.png" alt="KoraPayments" width="100%">
 </p>
 
 <h1 align="center">KoraPayments</h1>
 
 <p align="center">
-  <strong>Giải pháp thanh toán hiện đại cho máy chủ Minecraft</strong>
+  <strong>Nền tảng thanh toán và tự động hóa doanh thu cho Minecraft 1.21.x</strong>
 </p>
 
 <p align="center">
-  Nạp bank • Nạp thẻ • Mốc nạp • Khuyến mãi • Discord Webhook • Discord Auto Buy
+  Nạp ngân hàng · Nạp thẻ cào · Mốc nạp · Discord Webhook · Discord Auto Buy
 </p>
 
 <p align="center">
-  <a href="https://github.com/dduong19208/KoraPayments/releases/latest">
-    <img src="https://img.shields.io/badge/Release-v1.4.2-2ea44f?style=for-the-badge" alt="Release v1.4.2">
-  </a>
-  <img src="https://img.shields.io/badge/Minecraft-1.21.x-brightgreen?style=for-the-badge" alt="Minecraft">
-  <img src="https://img.shields.io/badge/Java-21+-orange?style=for-the-badge" alt="Java">
-  <img src="https://img.shields.io/badge/Bukkit%20%2F%20Spigot%20%2F%20Paper%20%2F%20Folia%20%2F%20Leaf-Supported-blue?style=for-the-badge" alt="Platform">
+  <a href="https://github.com/dduong19208/KoraPayments/releases/latest"><img src="https://img.shields.io/github/v/release/dduong19208/KoraPayments?style=flat-square&color=0ea5e9" alt="Latest release"></a>
+  <a href="https://github.com/dduong19208/KoraPayments/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/dduong19208/KoraPayments/build.yml?branch=main&style=flat-square&label=build" alt="Build status"></a>
+  <img src="https://img.shields.io/badge/Minecraft-1.21.x-65a30d?style=flat-square" alt="Minecraft 1.21.x">
+  <img src="https://img.shields.io/badge/Java-21%2B-f59e0b?style=flat-square" alt="Java 21+">
+  <img src="https://img.shields.io/badge/Folia-supported-8b5cf6?style=flat-square" alt="Folia supported">
+  <a href="https://dsc.gg/korapayments"><img src="https://img.shields.io/badge/Discord-Support-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord Support"></a>
 </p>
-<div align="center">
 
-[⬇️ Tải plugin](../../releases/latest) · [📘 Hướng dẫn](#-hướng-dẫn-cài-đặt-nhanh) · [⚙️ Cấu hình](docs/CONFIGURATION.md) · [💬 Commands](docs/COMMANDS.md) · [🧩 Placeholders](docs/PLACEHOLDERS.md)
-
-</div>
-
----
-
-## ✨ Giới thiệu
-
-**KoraPayments** là plugin thanh toán dành cho Minecraft server, tập trung vào trải nghiệm nạp tiền nhanh, rõ ràng và dễ quản trị. Plugin hỗ trợ nạp ngân hàng qua QR, nạp thẻ cào, khuyến mãi theo sự kiện, mốc nạp cá nhân/toàn server, lịch sử giao dịch, bảng xếp hạng nạp, Discord webhook và hệ thống Discord Auto Buy.
-
-Plugin được thiết kế theo hướng thân thiện với server production:
-
-- Tách module rõ ràng giữa nạp bank, nạp thẻ, mốc nạp, giao diện, Discord Store và PlaceholderAPI.
-- Hỗ trợ **Bukkit/Spigot/Paper/Folia/Leaf 1.21.x**.
-- Có scheduler tương thích nền tảng để giảm rủi ro chạy task sai thread trên Folia.
-- Có log giao dịch, chống spam log và tùy chọn ghi log bất đồng bộ.
-- Có nhiều ngôn ngữ sẵn trong thư mục `languages`.
-- Không bắt buộc PlaceholderAPI, nhưng sẽ tự đăng ký placeholder khi plugin này có mặt.
+<p align="center">
+  <a href="https://github.com/dduong19208/KoraPayments/releases/latest">Download</a>
+  · <a href="docs/CONFIGURATION.md">Configuration</a>
+  · <a href="docs/COMMANDS.md">Commands</a>
+  · <a href="docs/PLACEHOLDERS.md">Placeholders</a>
+  · <a href="docs/DISCORD_STORE.md">Discord Store</a>
+  · <a href="https://dsc.gg/korapayments">Discord Support</a>
+  · <a href="SUPPORT.md">Support</a>
+</p>
 
 ---
 
-## 🆕 Điểm mới trong 1.4.2
+## Tổng quan
 
-- Sửa Native Dialog UI trên Paper/Leaf 1.21.11 khi Adventure trả về builder implementation không public.
-- Giữ nguyên luồng inventory/chat fallback trên Spigot, Paper/Leaf cũ hoặc runtime không có Dialog API.
-- Bổ sung kiểm thử hồi quy trực tiếp với Adventure 4.26.1 để ngăn lỗi `IllegalAccessException` tái xuất hiện.
-- Bao gồm cải tiến mốc nạp 1.4.1: điều kiện nạp cá nhân riêng cho từng mốc và mô tả phần thưởng thân thiện hơn.
+KoraPayments hợp nhất các luồng nạp tiền, phát thưởng và đối soát vào một plugin duy nhất. Người chơi có giao diện rõ ràng; quản trị viên có cấu hình tách biệt, log chi tiết và nhiều lựa chọn database/economy để vận hành trên server production.
 
----
+| Nhóm | Khả năng |
+|---|---|
+| Thanh toán | Nạp ngân hàng qua QR, nạp thẻ cào, giới hạn số tiền, timeout và tự động kiểm tra giao dịch |
+| Giao diện | Native Dialog trên Paper/Leaf, inventory/chat fallback trên các runtime còn lại, GUI tùy chỉnh qua `gui.yml` |
+| Phát thưởng | Command theo thứ tự, Vault, PlayerPoints, FancyEco/FancyEconomy, khuyến mãi riêng cho bank và thẻ |
+| Cộng đồng | Mốc nạp cá nhân/toàn server, bossbar tiến độ, điều kiện cá nhân, chống nhận thưởng lặp |
+| Quản trị | Lịch sử giao dịch, top tổng/tuần/tháng, nạp thủ công, reload và kiểm tra trạng thái trong game |
+| Discord | Webhook giao dịch và KoraStore Auto Buy với storefront, đơn hàng, log, feedback và giao hàng tự động |
+| Dữ liệu | SQLite, MySQL, MariaDB và PostgreSQL; pool, timeout và index phù hợp từng backend |
+| Tích hợp | PlaceholderAPI, nhiều ngôn ngữ, scheduler tương thích Folia và cơ chế economy fallback |
 
-## ⬇️ Tải plugin
+### Provider được hỗ trợ
 
-### Bản ổn định mới nhất
+| Loại | Lựa chọn |
+|---|---|
+| Ngân hàng | SePay, PayOS |
+| Thẻ cào | GachTheFast, Card2K |
+| Economy | Command, Auto, Vault, PlayerPoints, FancyEco/FancyEconomy |
+| Database | SQLite, MySQL, MariaDB, PostgreSQL |
 
-➡️ **Download:** [KoraPayments Releases](../../releases/latest)
+## Có gì mới trong 1.4.3
 
-Sau khi mở trang Releases, tải file:
+- Thêm Discord Support có thể cấu hình và hiển thị trong banner console cùng các lệnh thông tin.
+- Bổ sung badge, liên kết góp ý, trang GitHub Issue và tài liệu hỗ trợ thống nhất.
+- Giữ riêng `Author Discord: lz.dy.dg` và `Discord Support: https://dsc.gg/korapayments`.
+- Không thay đổi schema database, claim, provider hoặc luồng thanh toán hiện có.
 
-```text
-KoraPayments-1.4.2.jar
-```
+Xem toàn bộ thay đổi tại [CHANGELOG.md](CHANGELOG.md) và hướng dẫn nâng cấp tại [UPGRADE-1.4.3.md](UPGRADE-1.4.3.md).
 
-> Không tải source code `.zip`/`.tar.gz` nếu bạn chỉ muốn cài plugin vào server. Hãy tải file `.jar` trong phần **Assets** của release.
-
----
-
-## 🚀 Tính năng nổi bật
-
-### 💳 Nạp ngân hàng
-
-- Hỗ trợ provider: **SePay** và **PayOS**.
-- Tạo giao dịch theo số tiền người chơi nhập.
-- Hỗ trợ giao diện chọn mệnh giá bằng `/bank gui`.
-- Hỗ trợ SQLite, MySQL, MariaDB và PostgreSQL.
-- Hiển thị thông tin chuyển khoản và QR thanh toán trong game.
-- Tự kiểm tra giao dịch theo chu kỳ cấu hình.
-- Hỗ trợ giới hạn số tiền tối thiểu/tối đa và timeout giao dịch.
-- Hỗ trợ khuyến mãi riêng cho nạp bank.
-
-### 🧾 Nạp thẻ cào
-
-- Hỗ trợ provider: **Card2K** và **GachTheFast**.
-- Có Dialog UI trên Paper/Leaf và inventory/chat fallback bằng `/napthe gui`.
-- Có thể nhập serial/mã thẻ trực tiếp bằng command.
-- Hỗ trợ chiết khấu theo mệnh giá hoặc theo nhà mạng.
-- Hỗ trợ nhiều command thưởng theo thứ tự sau khi nạp thành công.
-- Hỗ trợ khuyến mãi riêng cho nạp thẻ.
-
-### 🎁 Mốc nạp cá nhân và toàn server
-
-- Mốc nạp cá nhân: người chơi nhận thưởng khi đạt từng mốc.
-- Mốc nạp toàn server: toàn cộng đồng mở khóa phần thưởng khi tổng nạp server đạt mốc.
-- Có bossbar theo dõi tiến độ mốc nạp server.
-- Có cơ chế chống clone nhận thưởng mốc server.
-- Admin có thể đổi mốc bossbar đang theo dõi bằng command.
-
-### 🏆 Top nạp và lịch sử giao dịch
-
-- `/topnap` hỗ trợ xem top tổng, tuần, tháng.
-- `/lichsunap` cho người chơi xem lịch sử nạp cá nhân.
-- Admin có thể xem lịch sử nạp của người chơi khác.
-- Có lệnh reset dữ liệu top nạp khi cần.
-
-### 🔔 Discord webhook
-
-- Gửi thông báo giao dịch nạp bank, nạp thẻ và nạp thủ công về Discord.
-- Có cấu hình riêng màu embed, avatar, username và bật/tắt từng loại giao dịch.
-
-### 🛒 Discord Auto Buy / KoraStore
-
-- Bot Discord đăng embed cửa hàng và menu chọn sản phẩm.
-- Người mua nhập tên nhân vật, thanh toán, sau đó plugin tự giao hàng bằng command.
-- Hỗ trợ trạng thái đơn đang chờ người chơi online.
-- Có log đơn thành công, đơn lỗi và feedback sau mua.
-- Có slash command staff để kiểm tra mã đơn.
-- Có slash command Discord `/taokenhbanhang` để đăng storefront mà không cần vào Minecraft.
-
-### 🧩 PlaceholderAPI
-
-KoraPayments tự đăng ký các identifier:
-
-- `%kp_*%`
-- `%korapayments_*%` làm alias tương thích khi cần tránh trùng identifier.
-
-Xem đầy đủ tại: [docs/PLACEHOLDERS.md](docs/PLACEHOLDERS.md)
-
----
-
-## ✅ Yêu cầu
+## Tương thích
 
 | Thành phần | Yêu cầu |
 |---|---|
-| Java | Java 21 trở lên |
-| Server | Bukkit/Spigot/Paper/Folia/Leaf 1.21.x |
-| Folia | Có khai báo `folia-supported: true` và scheduler tương thích |
-| PlaceholderAPI | Tùy chọn, dùng nếu cần placeholder |
-| Plugin điểm/coin/economy | Tùy chọn, phụ thuộc command thưởng bạn cấu hình |
-| Discord Bot | Chỉ cần nếu bật Discord Auto Buy |
+| Java | 21 trở lên |
+| Minecraft | 1.21.x |
+| Server | Bukkit, Spigot, Paper, Folia, Leaf |
+| PlaceholderAPI | Tùy chọn |
+| Vault / PlayerPoints / FancyEco | Tùy chọn theo economy provider |
+| Discord Bot | Chỉ cần khi bật KoraStore Auto Buy |
 
----
+Plugin khai báo `folia-supported: true` và sử dụng scheduler thích ứng để giữ các thao tác player/global đúng ngữ cảnh nền tảng.
 
-## 📦 Hướng dẫn cài đặt nhanh
+## Cài đặt nhanh
 
-1. Tải file `KoraPayments-1.4.2.jar` tại [Releases](../../releases/latest).
-2. Dừng server Minecraft.
-3. Chép file `.jar` vào thư mục:
+1. Tải `KoraPayments-1.4.3.jar` từ [GitHub Releases](https://github.com/dduong19208/KoraPayments/releases/latest).
+2. Dừng hoàn toàn Minecraft server.
+3. Đặt JAR vào thư mục `plugins/`.
+4. Khởi động server một lần để tạo cấu hình mặc định.
+5. Chọn provider và điền thông tin xác thực trong các file tương ứng.
+6. Kiểm tra bằng `/kora-admin status` trước khi mở tính năng cho người chơi.
 
-```text
-plugins/
-```
+> Khi nâng cấp server đang hoạt động, luôn backup `plugins/KoraPayments/` và database trước khi thay JAR. Không xóa các file YAML hiện có nếu bạn muốn giữ cấu hình tùy chỉnh.
 
-4. Khởi động server để plugin tạo file cấu hình.
-5. Mở thư mục:
+### Bản đồ cấu hình
 
-```text
-plugins/KoraPayments/
-```
+| File | Nội dung |
+|---|---|
+| `config.yml` | Ngôn ngữ, provider đang dùng, logging, metrics và ưu tiên Dialog UI |
+| `database.yml` | SQLite/MySQL/MariaDB/PostgreSQL, pool và timeout |
+| `payments.yml` | Luồng bank/thẻ, thuế, khuyến mãi, economy và lệnh phát thưởng |
+| `providers/*.yml` | API key và thiết lập riêng của SePay, PayOS, GachTheFast, Card2K |
+| `gui.yml` | Layout, item, màu sắc và nội dung các inventory GUI |
+| `milestones.yml` | Mốc nạp cá nhân/toàn server, điều kiện và phần thưởng |
+| `discord.yml` | Discord webhook cho giao dịch |
+| `store.yml` | Discord Auto Buy, kênh, role quản trị và danh mục sản phẩm |
+| `languages/*.yml` | Toàn bộ nội dung hiển thị theo ngôn ngữ |
 
-6. Cấu hình các file:
+Tài liệu cấu hình đầy đủ: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-```text
-config.yml
-database.yml
-payments.yml
-providers/*.yml
-discord.yml
-milestones.yml
-gui.yml
-store.yml
-languages/vi.yml
-```
-
-7. Reload plugin:
-
-```text
-/kora-admin reload
-```
-
-8. Kiểm tra trạng thái:
-
-```text
-/kora-admin status
-```
-
----
-
-## ⚙️ Cấu hình nhanh
-
-### Chọn ngôn ngữ
-
-```yaml
-language: "vi"
-```
-
-Ngôn ngữ có sẵn: `vi`, `en`, `es`, `fr`, `de`, `pt`, `ru`, `zh`, `ja`, `ko`, `th`, `id`, `ms`, `tl`, `hi`, `ar`, `tr`, `pl`.
-
-### Chọn provider
+### Cấu hình provider
 
 ```yaml
 providers:
@@ -207,16 +115,18 @@ providers:
   economy: "command"     # command | auto | vault | playerpoints | fancyeco
 ```
 
-API key/tài khoản được tách riêng trong `providers/*.yml`.
+Thông tin nhạy cảm được tách vào `providers/*.yml`. Với Discord Store, có thể đọc bot token từ biến môi trường thay vì ghi trực tiếp vào repository.
 
-### Database
+### Cấu hình database
 
 ```yaml
 database:
-  type: sqlite # sqlite | mysql | mariadb | postgresql
+  type: "sqlite" # sqlite | mysql | mariadb | postgresql
 ```
 
-### Nhiều lệnh thưởng
+SQLite phù hợp cho cài đặt đơn giản. MySQL, MariaDB hoặc PostgreSQL phù hợp hơn khi cần database dùng chung và quản trị tập trung.
+
+### Nhiều lệnh phát thưởng
 
 ```yaml
 economy:
@@ -225,162 +135,119 @@ economy:
     - "crate key give {player} napthe 1"
 ```
 
-Công thức mặc định:
+Các command được chạy theo đúng thứ tự cấu hình sau khi giao dịch được provider xác nhận.
 
-```text
-points = số_tiền / 1000 * conversion-rate
-```
+## Lệnh chính
 
-Xem chi tiết tại: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
-
----
-
-## 💬 Lệnh chính
-
-| Lệnh | Quyền | Mô tả |
-|---|---:|---|
-| `/bank <số_tiền>` | `korapayments.default` | Tạo giao dịch nạp ngân hàng |
-| `/bank gui` | `korapayments.default` | Mở GUI chọn mệnh giá nạp bank |
-| `/bank cancel` | `korapayments.default` | Hủy giao dịch bank đang chờ |
-| `/napthe gui` | `korapayments.default` | Mở GUI nạp thẻ |
-| `/napthe <loại> <mệnh_giá> [serial] [mã_thẻ]` | `korapayments.default` | Nạp thẻ bằng command |
-| `/confirmcard` | `korapayments.default` | Xác nhận gửi thẻ đang nhập |
-| `/cancelcard` | `korapayments.default` | Hủy phiên nhập thẻ |
-| `/topnap [all\|week\|month] [trang]` | `korapayments.default` | Xem bảng xếp hạng nạp |
-| `/lichsunap` | `korapayments.default` | Xem lịch sử nạp cá nhân |
-| `/mocnap canhan` | `korapayments.default` | Xem/nhận mốc nạp cá nhân |
-| `/mocnap server` | `korapayments.default` | Xem/nhận mốc nạp toàn server |
-| `/mocnap bossbar [on\|off\|toggle\|status]` | `korapayments.default` | Tùy chỉnh bossbar cá nhân |
-| `/kora-admin` hoặc `/kp-admin` | `korapayments.admin` | Mở lệnh quản trị |
-| `/taokenhbanhang [publish\|reload\|status]` | `korapayments.admin` | Quản lý Discord Auto Buy storefront |
-
-Danh sách đầy đủ: [docs/COMMANDS.md](docs/COMMANDS.md)
-
----
-
-## 🔐 Quyền hạn
-
-| Permission | Mặc định | Mục đích |
-|---|---|---|
-| `korapayments.default` | `true` | Cho phép người chơi dùng các lệnh nạp, top, lịch sử, mốc nạp |
-| `korapayments.admin` | `op` | Cho phép quản trị plugin, reload, nạp thủ công, reset dữ liệu, quản lý store |
-
----
-
-## 🧩 PlaceholderAPI nhanh
-
-| Placeholder | Mô tả |
+| Lệnh | Mô tả |
 |---|---|
-| `%kp_donate_total%` | Tổng nạp cá nhân |
-| `%kp_donate_total_today%` | Tổng nạp cá nhân hôm nay |
-| `%kp_donate_total_week%` | Tổng nạp cá nhân trong tuần |
-| `%kp_donate_total_month%` | Tổng nạp cá nhân trong tháng |
-| `%kp_donate_server_total%` | Tổng nạp toàn server |
-| `%kp_donate_total_top_player_1%` | Tên người chơi top 1 |
-| `%kp_donate_total_top_amount_1%` | Số tiền top 1 |
-| `%kp_mocnapserver%` | Tiến độ mốc nạp server hiện tại |
-| `%kp_transactions%` | Tổng số giao dịch |
+| `/bank <số_tiền\|gui\|cancel>` | Tạo, mở giao diện hoặc hủy giao dịch ngân hàng |
+| `/napthe gui` | Mở luồng nạp thẻ thích ứng theo runtime |
+| `/napthe <loại> <mệnh_giá> [serial] [mã_thẻ]` | Nạp thẻ trực tiếp bằng command |
+| `/confirmcard`, `/cancelcard` | Xác nhận hoặc hủy phiên nhập thẻ |
+| `/topnap [all\|week\|month] [trang]` | Xem bảng xếp hạng nạp |
+| `/lichsunap` | Xem lịch sử nạp cá nhân |
+| `/mocnap <canhan\|server\|bossbar>` | Xem mốc nạp, nhận thưởng và quản lý bossbar cá nhân |
+| `/kora-admin` | Quản trị, reload, status, nạp thủ công và quản lý dữ liệu |
+| `/taokenhbanhang [publish\|reload\|status]` | Quản lý Discord Auto Buy storefront |
 
-Có thể thêm modifier raw number:
+| Permission | Mặc định | Phạm vi |
+|---|---|---|
+| `korapayments.default` | `true` | Lệnh dành cho người chơi |
+| `korapayments.admin` | `op` | Toàn bộ thao tác quản trị |
+
+Danh sách tham số và lệnh quản trị đầy đủ: [docs/COMMANDS.md](docs/COMMANDS.md).
+
+## PlaceholderAPI
+
+KoraPayments đăng ký `%kp_*%` và alias `%korapayments_*%` khi PlaceholderAPI có mặt.
 
 ```text
-_raw, _number, _plain, _unformatted, _noformat
+%kp_donate_total%
+%kp_donate_total_today%
+%kp_donate_total_week%
+%kp_donate_total_month%
+%kp_donate_server_total%
+%kp_donate_total_top_player_1%
+%kp_donate_total_top_amount_1%
+%kp_mocnapserver%
+%kp_transactions%
 ```
 
-Ví dụ:
+Các modifier `_raw`, `_number`, `_plain`, `_unformatted`, `_noformat` trả về số không định dạng. Xem danh sách đầy đủ tại [docs/PLACEHOLDERS.md](docs/PLACEHOLDERS.md).
 
-```text
-%kp_donate_total_raw%
-%kp_donate_server_total_number%
+## Discord Auto Buy
+
+KoraStore cho phép đăng storefront trực tiếp lên Discord, nhận lựa chọn sản phẩm và tên nhân vật, theo dõi thanh toán rồi giao hàng bằng command khi người chơi online.
+
+- Danh mục sản phẩm và embed có thể chỉnh trong `store.yml`.
+- Có kênh riêng cho storefront, đơn thành công, feedback và lỗi.
+- Có role quản trị, slash command kiểm tra đơn và lịch sử đơn có giới hạn.
+- Đơn chờ được thử giao lại khi người chơi vào đúng server.
+
+Hướng dẫn thiết lập: [docs/DISCORD_STORE.md](docs/DISCORD_STORE.md).
+
+## Ngôn ngữ
+
+Các bản dịch đi kèm: `vi`, `en`, `es`, `fr`, `de`, `pt`, `ru`, `zh`, `ja`, `ko`, `th`, `id`, `ms`, `tl`, `hi`, `ar`, `tr`, `pl`.
+
+```yaml
+language: "vi"
 ```
 
----
+Mọi nội dung chính đều nằm trong `languages/*.yml`, giúp server tùy chỉnh cách diễn đạt mà không sửa source code.
 
-## 🛠 Build từ source
+## Build và kiểm thử
 
-Yêu cầu máy build có **Java 21+** và **Maven 3.9+**.
+Yêu cầu: JDK 21+ và Maven 3.9+.
 
 ```bash
-git clone https://github.com/YOUR_ORG/KoraPayments.git
+git clone https://github.com/dduong19208/KoraPayments.git
 cd KoraPayments
 mvn clean package
 ```
 
-File `.jar` sau build nằm tại:
+JAR đầu ra:
 
 ```text
-target/KoraPayments-1.4.2.jar
+target/KoraPayments-1.4.3.jar
 ```
 
----
+Project có regression test cho Dialog reflection bridge. GitHub Actions chạy `mvn clean verify` cho mọi push và pull request trước khi tạo artifact.
 
-## 🚢 Tạo GitHub Release
+## Tài liệu
 
-Repo này đã có workflow tự build và đính kèm `.jar` khi tạo tag dạng `v*`.
+| Tài liệu | Nội dung |
+|---|---|
+| [Configuration](docs/CONFIGURATION.md) | Cấu hình đầy đủ và ví dụ production |
+| [Commands](docs/COMMANDS.md) | Toàn bộ lệnh người chơi và quản trị |
+| [Placeholders](docs/PLACEHOLDERS.md) | Danh sách PlaceholderAPI và modifier |
+| [Discord Store](docs/DISCORD_STORE.md) | Thiết lập storefront và quy trình đơn hàng |
+| [Changelog](CHANGELOG.md) | Lịch sử phiên bản |
+| [Security](SECURITY.md) | Bảo vệ token và báo cáo lỗ hổng |
+| [Support](SUPPORT.md) | Checklist thu thập thông tin khi gặp lỗi |
 
-```bash
-git tag v1.4.2
-git push origin v1.4.2
-```
+## Bảo mật
 
-Sau đó mở tab **Actions** hoặc **Releases** trên GitHub để kiểm tra file jar đã được attach vào release.
+Không commit API key, bot token, webhook URL hoặc database credential thật. Nếu secret từng bị public, hãy thu hồi và tạo lại ngay cả khi commit đã được xóa.
 
-Nội dung release có tại: [GITHUB_RELEASE_v1.4.2.md](GITHUB_RELEASE_v1.4.2.md)
+Xem chính sách đầy đủ tại [SECURITY.md](SECURITY.md).
 
----
+## Hỗ trợ
 
-## 🧯 Bảo mật vận hành
+> **Discord Support:** [https://dsc.gg/korapayments](https://dsc.gg/korapayments) — tham gia để nhận hỗ trợ và gửi góp ý trực tiếp.
 
-Không commit các thông tin thật sau lên GitHub:
+**Author Discord:** `lz.dy.dg`
 
-- `sepay.api-token`
-- `payos.client-id`, `payos.api-key`, `payos.checksum-key`
-- `card2k.partner_id`, `card2k.partner_key`
-- `gachthefast.partner_id`, `gachthefast.partner_key`, `wallet_id`
-- `discord-webhook.url`
-- `store.yml` chứa `bot-token`
+Trước khi báo lỗi, chạy `/kora-admin status`, bật `logging.debug` khi cần và chuẩn bị:
 
-Nếu bạn vô tình public token, hãy thu hồi token cũ và tạo token mới ngay.
+- phiên bản KoraPayments, server và Java;
+- provider/database/economy đang sử dụng;
+- log đầy đủ quanh thời điểm xảy ra lỗi;
+- các bước tái hiện đã loại bỏ thông tin nhạy cảm.
 
-Xem thêm: [SECURITY.md](SECURITY.md)
+Mở issue tại [GitHub Issues](https://github.com/dduong19208/KoraPayments/issues) hoặc làm theo [SUPPORT.md](SUPPORT.md).
 
----
+## License
 
-## 🧪 Checklist test sau khi cài
-
-- `/kora-admin status` hiển thị đúng provider và PlaceholderAPI.
-- `/bank 10000` tạo được giao dịch, QR và nội dung chuyển khoản.
-- `/bank cancel` hủy được giao dịch đang chờ.
-- `/napthe gui` mở được GUI chọn thẻ.
-- `/topnap` mở được bảng xếp hạng.
-- `/lichsunap` hiển thị lịch sử cá nhân.
-- `/mocnap server` hiển thị mốc server.
-- Nếu bật Discord webhook, giao dịch test gửi được embed về Discord.
-- Nếu bật Store, `/taokenhbanhang status` không báo thiếu bot token/channel.
-
----
-
-## 📁 Cấu trúc repo
-
-```text
-src/main/java/vn/korapayments/       Source plugin
-src/main/resources/config.yml        Provider selector/cấu hình chung
-src/main/resources/database.yml      SQLite/MySQL/MariaDB/PostgreSQL
-src/main/resources/payments.yml      Bank, thẻ, economy và reward
-src/main/resources/providers/        API từng provider
-src/main/resources/gui.yml            Giao diện tùy chỉnh
-src/main/resources/store.yml         Cấu hình Discord Auto Buy
-src/main/resources/languages/        Ngôn ngữ hiển thị
-docs/                                Tài liệu sử dụng chi tiết
-.github/workflows/                   Build và release automation
-```
-
----
-
-## 🆘 Hỗ trợ
-
-- Dùng `/kora-admin status` trước khi báo lỗi để kiểm tra trạng thái plugin.
-- Bật `logging.debug: true` khi cần log chi tiết.
-- Khi gửi issue, vui lòng đính kèm version server, Java version, provider đang dùng và log lỗi liên quan.
-
-Tạo issue tại tab **Issues** của repo hoặc xem [SUPPORT.md](SUPPORT.md).
+Copyright © DuyDuong. Dự án được phát hành theo điều khoản **All Rights Reserved**; xem [LICENSE](LICENSE) trước khi sao chép, chỉnh sửa hoặc phân phối.

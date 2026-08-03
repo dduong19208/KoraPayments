@@ -1,6 +1,6 @@
 # Configuration - KoraPayments
 
-KoraPayments 1.4.0 tách cấu hình theo chức năng trong `plugins/KoraPayments/`:
+KoraPayments 1.4.3 tách cấu hình theo chức năng trong `plugins/KoraPayments/`:
 
 ```text
 config.yml
@@ -50,6 +50,17 @@ Ngôn ngữ có sẵn:
 ```text
 vi, en, es, fr, de, pt, ru, zh, ja, ko, th, id, ms, tl, hi, ar, tr, pl
 ```
+
+### Discord Support
+
+```yaml
+support:
+  discord-url: "https://dsc.gg/korapayments"
+```
+
+Link này xuất hiện trong banner console, `/korapayments`, `/kora-admin` và
+`/kora-admin status`. Nếu server cũ chưa có key, plugin tự dùng link mặc định;
+không ghi đè hoặc làm mất cấu hình hiện tại.
 
 ---
 
