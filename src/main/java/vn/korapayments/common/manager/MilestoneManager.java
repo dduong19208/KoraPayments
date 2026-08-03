@@ -29,6 +29,8 @@ public class MilestoneManager {
     public static final String SERVER_MILESTONES_ROOT = "server-milestones";
     public static final String SERVER_MILESTONES_PATH = SERVER_MILESTONES_ROOT + ".milestones";
     public static final String SERVER_MILESTONES_ANTI_CLONE_PATH = SERVER_MILESTONES_ROOT + ".anti-clone";
+    public static final String MINIMUM_PERSONAL_DONATED_KEY = "minimum-personal-donated";
+    public static final String DISPLAY_REWARDS_KEY = "display-rewards";
     private static final long DEFAULT_SERVER_MILESTONE_MIN_PERSONAL_DONATED = 20_000L;
     private static final long BOSS_BAR_SHUTDOWN_TIMEOUT_SECONDS = 2L;
 
@@ -43,7 +45,8 @@ public class MilestoneManager {
                                             long minimumPersonalDonated, boolean reached,
                                             boolean claimed, boolean antiCloneProtected) {
         public boolean blockedByAntiClone() {
-            return antiCloneProtected && personalDonated < minimumPersonalDonated;
+            return reached && !claimed && antiCloneProtected
+                    && personalDonated < minimumPersonalDonated;
         }
 
         public boolean claimable() {
@@ -188,9 +191,14 @@ public class MilestoneManager {
         long serverTotal = getCachedServerTotal();
         boolean reached = serverTotal >= milestone;
         boolean claimed = player != null && plugin.getDatabaseManager().hasClaimedServerMilestone(player.getName(), milestoneKey);
-        long minimumPersonalDonated = getServerMilestoneMinimumPersonalDonated();
-        boolean antiCloneProtected = reached && !claimed
-                && isServerMilestoneAntiCloneProtected(player, milestoneKey, minimumPersonalDonated);
+        boolean milestoneOverride = hasServerMilestonePersonalRequirementOverride(milestone);
+        long minimumPersonalDonated = getServerMilestoneMinimumPersonalDonated(milestone);
+        boolean antiCloneProtected = isServerMilestonePersonalRequirementProtected(
+                player,
+                milestoneKey,
+                minimumPersonalDonated,
+                milestoneOverride
+        );
 
         return new ServerMilestoneClaimState(
                 serverTotal,
@@ -218,7 +226,42 @@ public class MilestoneManager {
         ));
     }
 
-    private boolean isServerMilestoneAntiCloneProtected(Player player, String milestoneKey, long minimumPersonalDonated) {
+    public long getServerMilestoneMinimumPersonalDonated(long milestone) {
+        String overridePath = getServerMilestonePersonalRequirementPath(milestone);
+        if (plugin.config().contains(overridePath)) {
+            return Math.max(0L, plugin.config().getLong(overridePath, 0L));
+        }
+        return getServerMilestoneMinimumPersonalDonated();
+    }
+
+    public boolean hasServerMilestonePersonalRequirementOverride(long milestone) {
+        return plugin.config().contains(getServerMilestonePersonalRequirementPath(milestone));
+    }
+
+    public void setServerMilestonePersonalRequirement(long milestone, Long minimumPersonalDonated) {
+        if (!isServerMilestoneConfigured(milestone)) {
+            throw new IllegalArgumentException("Server milestone is not configured: " + milestone);
+        }
+
+        String path = getServerMilestonePersonalRequirementPath(milestone);
+        plugin.config().set(path, minimumPersonalDonated == null ? null : Math.max(0L, minimumPersonalDonated));
+        plugin.getConfigurationManager().saveMilestones();
+        reload();
+    }
+
+    private String getServerMilestonePersonalRequirementPath(long milestone) {
+        return SERVER_MILESTONES_PATH + "." + milestone + "." + MINIMUM_PERSONAL_DONATED_KEY;
+    }
+
+    private boolean isServerMilestonePersonalRequirementProtected(Player player, String milestoneKey,
+                                                                    long minimumPersonalDonated,
+                                                                    boolean milestoneOverride) {
+        // A per-milestone value is an explicit claim condition for every player.
+        // Without an override, preserve the legacy anti-clone/new-player-only behavior.
+        if (milestoneOverride) {
+            return minimumPersonalDonated > 0L;
+        }
+
         if (!isServerMilestoneAntiCloneEnabled() || minimumPersonalDonated <= 0L) {
             return false;
         }

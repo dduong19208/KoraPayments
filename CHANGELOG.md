@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.4.2
+
+### Fixed
+
+- Sửa `IllegalAccessException` khiến Native Dialog UI bị tắt trên Paper/Leaf 1.21.11 khi chạy với Adventure/Java mới.
+- Reflection bridge giờ gọi các method builder qua interface API công khai thay vì implementation nội bộ không public.
+
+### Compatibility
+
+- Giữ nguyên toàn bộ luồng nạp thẻ, nạp ngân hàng và inventory/chat fallback hiện có.
+- Không thay đổi cấu hình, schema database hoặc dữ liệu người dùng.
+- Thêm regression test cho cơ chế truy cập builder để bảo vệ các bản cập nhật sau.
+
+## 1.4.1
+
+### Added
+
+- Mỗi mốc nạp chung hỗ trợ `minimum-personal-donated` riêng và kiểm tra bắt buộc khi nhận quà.
+- `display-rewards` cho phép mô tả chính xác phần thưởng trên GUI mà không phụ thuộc cú pháp plugin crate/rank/EXP bên ngoài.
+- `/kora-admin mocnap dieukien <mốc_server> <số_tiền|0|macdinh>` để chỉnh điều kiện trực tiếp trong game/console.
+- GUI đánh số mốc nạp chung, hiển thị tiến độ cá nhân, số phần thưởng và trạng thái nhận quà.
+
+### Compatibility
+
+- Claim cũ và schema database được giữ nguyên, không có migration dữ liệu.
+- Mốc không khai báo điều kiện riêng tiếp tục dùng cơ chế `anti-clone` cũ.
+
 ## 1.4.0
 
 ### Added

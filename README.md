@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/dduong19208/KoraPayments/releases/latest">
-    <img src="https://img.shields.io/badge/Release-v1.4.0-2ea44f?style=for-the-badge" alt="Release v1.4.0">
+    <img src="https://img.shields.io/badge/Release-v1.4.2-2ea44f?style=for-the-badge" alt="Release v1.4.2">
   </a>
   <img src="https://img.shields.io/badge/Minecraft-1.21.x-brightgreen?style=for-the-badge" alt="Minecraft">
   <img src="https://img.shields.io/badge/Java-21+-orange?style=for-the-badge" alt="Java">
@@ -43,6 +43,15 @@ Plugin được thiết kế theo hướng thân thiện với server production
 
 ---
 
+## 🆕 Điểm mới trong 1.4.2
+
+- Sửa Native Dialog UI trên Paper/Leaf 1.21.11 khi Adventure trả về builder implementation không public.
+- Giữ nguyên luồng inventory/chat fallback trên Spigot, Paper/Leaf cũ hoặc runtime không có Dialog API.
+- Bổ sung kiểm thử hồi quy trực tiếp với Adventure 4.26.1 để ngăn lỗi `IllegalAccessException` tái xuất hiện.
+- Bao gồm cải tiến mốc nạp 1.4.1: điều kiện nạp cá nhân riêng cho từng mốc và mô tả phần thưởng thân thiện hơn.
+
+---
+
 ## ⬇️ Tải plugin
 
 ### Bản ổn định mới nhất
@@ -52,7 +61,7 @@ Plugin được thiết kế theo hướng thân thiện với server production
 Sau khi mở trang Releases, tải file:
 
 ```text
-KoraPayments-1.4.0.jar
+KoraPayments-1.4.2.jar
 ```
 
 > Không tải source code `.zip`/`.tar.gz` nếu bạn chỉ muốn cài plugin vào server. Hãy tải file `.jar` trong phần **Assets** của release.
@@ -136,7 +145,7 @@ Xem đầy đủ tại: [docs/PLACEHOLDERS.md](docs/PLACEHOLDERS.md)
 
 ## 📦 Hướng dẫn cài đặt nhanh
 
-1. Tải file `KoraPayments-1.4.0.jar` tại [Releases](../../releases/latest).
+1. Tải file `KoraPayments-1.4.2.jar` tại [Releases](../../releases/latest).
 2. Dừng server Minecraft.
 3. Chép file `.jar` vào thư mục:
 
@@ -300,7 +309,7 @@ mvn clean package
 File `.jar` sau build nằm tại:
 
 ```text
-target/KoraPayments-1.4.0.jar
+target/KoraPayments-1.4.2.jar
 ```
 
 ---
@@ -310,13 +319,13 @@ target/KoraPayments-1.4.0.jar
 Repo này đã có workflow tự build và đính kèm `.jar` khi tạo tag dạng `v*`.
 
 ```bash
-git tag v1.4.0
-git push origin v1.4.0
+git tag v1.4.2
+git push origin v1.4.2
 ```
 
 Sau đó mở tab **Actions** hoặc **Releases** trên GitHub để kiểm tra file jar đã được attach vào release.
 
-Nội dung release có tại: [GITHUB_RELEASE_v1.4.0.md](GITHUB_RELEASE_v1.4.0.md)
+Nội dung release có tại: [GITHUB_RELEASE_v1.4.2.md](GITHUB_RELEASE_v1.4.2.md)
 
 ---
 

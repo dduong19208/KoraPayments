@@ -1,4 +1,4 @@
-# KoraPayments 1.4.0 - QA Report
+# KoraPayments 1.4.2 - QA Report
 
 Ngày kiểm tra gần nhất: 2026-08-01
 
@@ -37,14 +37,14 @@ Ngày kiểm tra gần nhất: 2026-08-01
 
 ## Giới hạn xác minh trong môi trường hiện tại
 
-Kiểm tra bổ sung ngày 2026-08-01:
+Kiểm tra bổ sung ngày 2026-08-03:
 
 - `mvn clean package`: PASS, biên dịch 44 source Java 21 và tạo shaded JAR.
-- Maven Surefire: PASS, project hiện không có test source riêng.
+- Maven Surefire: PASS, 2/2 regression test cho reflection bridge và Adventure 4.26.1.
 - Bukkit `YamlConfiguration` parse: PASS, 30/30 tệp YAML.
 - `gui.yml` version 2, `economy.reward-commands` và ba provider selector: PASS.
 - `config.yml`, `payments.yml`, `gui.yml` trong JAR khớp byte với source: PASS.
-- Local staging JAR SHA-256: `8A72FA1989462ECEE160CD8BD795D492FFDCCBBBF1ADA2807E10AF7B6B12671E`.
+- Local staging JAR 1.4.2 SHA-256: `EDB3CE8EAF99A9CC5CA0D0475007606B92D85BB49143C3AB5B11A9BF69037716`.
 
 Chưa thực hiện integration test trực tiếp trên:
 
@@ -64,7 +64,7 @@ mvn clean verify
 JAR dự kiến:
 
 ```text
-target/KoraPayments-1.4.0.jar
+target/KoraPayments-1.4.2.jar
 ```
 
 ## Ghi chú EzPay
